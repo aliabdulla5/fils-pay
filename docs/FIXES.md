@@ -76,6 +76,8 @@ The cookie is re-issued with the full session lifetime on OTP verification (inve
 
 **Verification:** Confirmed (code): `routes/auth.ts:183` (`promoteSession(…, sessionTtlHours)`). The 12-hour lifetime itself wasn't exercised; the browser runs were shorter than the old 10-minute window.
 
+**Later change:** The lifetime is now 48 hours; see [authentication/SESSION_POLICY.md](authentication/SESSION_POLICY.md). The cookie re-issue from this fix is what carries the new lifetime to the browser (`Max-Age=172800`, verified end to end).
+
 ### Fix 04 — Admin impersonation was too powerful
 
 **What didn't work:**

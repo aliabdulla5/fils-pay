@@ -67,6 +67,8 @@ a `Webhook-Delivery-Id` and is signed with HMAC-SHA256.
 
 - Merchant login is password then OTP. The pending session grants nothing
   until the OTP is verified.
+- A verified merchant session lasts 48 hours (absolute, enforced server-side
+  through `live_sessions`). See [authentication/SESSION_POLICY.md](authentication/SESSION_POLICY.md).
 - Merchant-scoped queries take the merchant from the authenticated context.
 - Outbound webhook signatures are HMAC-SHA256 compared in constant time.
 - KYC uploads are validated by detected content type (magic bytes).

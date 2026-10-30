@@ -31,7 +31,7 @@ type Step = { kind: "credentials" } | { kind: "otp"; challenge: DashboardLoginRe
  * scope for a frontend-only phase.
  */
 export function LoginPage() {
-  const { status, refresh } = useDashboardAuth();
+  const { status, refresh, sessionEnded } = useDashboardAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -158,6 +158,11 @@ export function LoginPage() {
           )}
         </div>
 
+        {sessionEnded && !error && step.kind === "credentials" ? (
+          <p className="dash-info" role="status">
+            Your session has ended. Sign in again to continue.
+          </p>
+        ) : null}
         {error ? <ErrorMessage>{error}</ErrorMessage> : null}
         {notice ? <Notice>{notice}</Notice> : null}
 

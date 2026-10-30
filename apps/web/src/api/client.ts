@@ -1,4 +1,5 @@
 import type { ApiErrorBody } from "../types.js";
+import { isSessionExpiry, SESSION_EXPIRED_EVENT } from "./sessionExpiry.js";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:3000";
 
@@ -46,6 +47,13 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   const body = await res.json().catch(() => null);
   if (!res.ok) {
+    // A protected request answering 401 means the server no longer accepts
+    // this session (expired or revoked). Tell the auth provider so the
+    // route guard sends the merchant to sign-in instead of leaving every
+    // page showing an "unauthenticated" error.
+    if (typeof window !== "undefined" && isSessionExpiry(path, res.status)) {
+      window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+    }
     throw new ApiError(res.status, (body as ApiErrorBody) ?? { error: "unknown_error" });
   }
   return body as T;

@@ -44,7 +44,7 @@ export interface Config {
    *  reads only this one and `requireMerchantAuth` never reads it at all, so
    *  an admin session can never be resolved as merchant authority. */
   adminCookieName: string;
-  /** Deliberately shorter than a merchant session's 12h — a minor extra
+  /** Deliberately shorter than a merchant session's 48h — a minor extra
    *  caution for the higher-privilege plane. */
   adminSessionTtlHours: number;
   adminPendingSessionTtlMinutes: number;
@@ -205,7 +205,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     pgPoolIdleTimeoutMs: parseIntEnv(env.PG_POOL_IDLE_TIMEOUT_MS, 30_000),
     pgPoolConnectionTimeoutMs: parseIntEnv(env.PG_POOL_CONNECTION_TIMEOUT_MS, 5_000),
 
-    sessionTtlHours: parseIntEnv(env.SESSION_TTL_HOURS, 12),
+    // Merchant session lifetime (absolute, from OTP verification): 48 h =
+    // 172,800 s. See docs/authentication/SESSION_POLICY.md.
+    sessionTtlHours: parseIntEnv(env.SESSION_TTL_HOURS, 48),
     pendingSessionTtlMinutes: parseIntEnv(env.PENDING_SESSION_TTL_MINUTES, 10),
     otpTtlMinutes: parseIntEnv(env.OTP_TTL_MINUTES, 5),
     otpCodeLength: parseIntEnv(env.OTP_CODE_LENGTH, 6),

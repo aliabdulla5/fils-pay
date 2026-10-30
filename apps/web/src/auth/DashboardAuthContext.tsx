@@ -1,6 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { logout as logoutRequest, me as fetchMe } from "../api/dashboardAuth.js";
+import { SESSION_EXPIRED_EVENT } from "../api/sessionExpiry.js";
 import type { DashboardMe } from "../types.js";
 
 export type DashboardAuthStatus = "loading" | "authenticated" | "anonymous";
@@ -14,6 +15,9 @@ export interface DashboardAuthValue {
   refresh: () => Promise<void>;
   /** `POST /v1/auth/logout`, then drops local state regardless. */
   signOut: () => Promise<void>;
+  /** True when a signed-in session was ended by the server (a protected
+   *  request answered 401) — not on a first visit and not after sign-out. */
+  sessionEnded: boolean;
 }
 
 const DashboardAuthReactContext = createContext<DashboardAuthValue | null>(null);
@@ -58,12 +62,30 @@ export function writeLastMerchantId(merchantId: string): void {
 export function DashboardAuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<DashboardAuthStatus>("loading");
   const [me, setMe] = useState<DashboardMe | null>(null);
+  const [sessionEnded, setSessionEnded] = useState(false);
+  const statusRef = useRef(status);
+  statusRef.current = status;
+
+  // The server decides when a session ends (docs/authentication/SESSION_POLICY.md).
+  // When a protected request answers 401, drop local state; RequireDashboardAuth
+  // then redirects to sign-in, remembering the page. Other tabs learn the same
+  // way on their next request, since they share the one session cookie.
+  useEffect(() => {
+    function onSessionExpired(): void {
+      if (statusRef.current === "authenticated") setSessionEnded(true);
+      setMe(null);
+      setStatus("anonymous");
+    }
+    window.addEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
       const current = await fetchMe();
       setMe(current);
       setStatus("authenticated");
+      setSessionEnded(false);
     } catch {
       // Any failure — 401, a revoked session, the API being down — lands on
       // the login screen rather than a half-rendered dashboard.
@@ -82,12 +104,13 @@ export function DashboardAuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setMe(null);
       setStatus("anonymous");
+      setSessionEnded(false);
     }
   }, []);
 
   const value = useMemo<DashboardAuthValue>(
-    () => ({ status, me, refresh, signOut }),
-    [status, me, refresh, signOut],
+    () => ({ status, me, refresh, signOut, sessionEnded }),
+    [status, me, refresh, signOut, sessionEnded],
   );
 
   return (
