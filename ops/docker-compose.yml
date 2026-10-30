@@ -121,6 +121,13 @@ services:
       # COOKIE_SECURE=false allows session cookies over unencrypted HTTP.
       OTP_DEV_EXPOSE: ${OTP_DEV_EXPOSE:-}
       COOKIE_SECURE: ${COOKIE_SECURE:-}
+      OTP_SMTP_HOST: ${OTP_SMTP_HOST:-}
+      OTP_SMTP_PORT: ${OTP_SMTP_PORT:-587}
+      OTP_SMTP_SECURE: ${OTP_SMTP_SECURE:-}
+      OTP_SMTP_USER: ${OTP_SMTP_USER:-}
+      OTP_SMTP_PASSWORD: ${OTP_SMTP_PASSWORD:-}
+      OTP_FROM_EMAIL: ${OTP_FROM_EMAIL:-}
+      OTP_FROM_NAME: ${OTP_FROM_NAME:-FilsPay}
       # Must match the settlement service's token; there is no dev fallback.
       SETTLEMENT_INTERNAL_TOKEN: ${SETTLEMENT_INTERNAL_TOKEN:-local-dev-token}
       ACQUIRER_CALLBACK_SIGNING_SECRET: ${ACQUIRER_CALLBACK_SIGNING_SECRET:-}

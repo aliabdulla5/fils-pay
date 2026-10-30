@@ -23,6 +23,20 @@ never runs it: it truncates the ledger, merchants and admin users.
 
 For development, apps/web and apps/admin also run as plain Vite dev servers (`npm run dev` inside each package) that proxy `/v1` to apps/api.
 
+## OTP email
+
+Merchant and admin OTPs use the same SMTP relay. Set `OTP_SMTP_HOST`,
+`OTP_FROM_EMAIL`, and the provider's SMTP credentials in `ops/.env`; use
+`OTP_SMTP_PORT=465` with `OTP_SMTP_SECURE=true` for implicit TLS, or the
+provider's STARTTLS port (commonly 587) with `OTP_SMTP_SECURE=false`.
+`OTP_SMTP_USER` and `OTP_SMTP_PASSWORD` must either both be set or both be
+blank for an unauthenticated internal relay. `OTP_FROM_NAME` is optional.
+
+In production, missing or failed email delivery returns `otp_delivery_failed`
+and does not create a usable pending login session. In development, when SMTP
+is not configured, the OTP is logged for local use and may be returned as
+`devOtpCode`; production never returns the code in the response.
+
 ## Files
 
 | File | Purpose |
@@ -63,6 +77,7 @@ first.
 | api | `DATABASE_URL`, `SETTLEMENT_INTERNAL_URL` | `environment:` |
 | api | `NODE_ENV` | `ops/.env`; defaults to `production` |
 | api | `WEBHOOK_SECRET_ENCRYPTION_KEY`, `ACQUIRER_CALLBACK_SIGNING_SECRET`, `SETTLEMENT_INTERNAL_TOKEN` | `ops/.env`; required in production |
+| api | `OTP_SMTP_HOST`, `OTP_FROM_EMAIL`, optionally `OTP_SMTP_USER` / `OTP_SMTP_PASSWORD` | `ops/.env`; required for production OTP delivery |
 | settlement | `DATABASE_URL` | `environment:` |
 | settlement | `SETTLEMENT_INTERNAL_TOKEN` | defaults to `dev-token` |
 | reporting | `DATABASE_URL` | `environment:`; runs `worker` by default |

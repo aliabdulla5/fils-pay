@@ -31,6 +31,17 @@ export interface Config {
   otpMaxAttempts: number;
   otpDevExpose: boolean;
 
+  /** Optional SMTP settings for OTP email. If absent, development logs a
+   *  code for local use; production rejects login instead of silently
+   *  treating a log line as delivery. */
+  otpSmtpHost: string;
+  otpSmtpPort: number;
+  otpSmtpSecure: boolean;
+  otpSmtpUser: string;
+  otpSmtpPassword: string;
+  otpFromEmail: string;
+  otpFromName: string;
+
   argon2MemoryKib: number;
   argon2TimeCost: number;
   argon2Parallelism: number;
@@ -220,7 +231,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     otpTtlMinutes: parseIntEnv(env.OTP_TTL_MINUTES, 5),
     otpCodeLength: parseIntEnv(env.OTP_CODE_LENGTH, 6),
     otpMaxAttempts: parseIntEnv(env.OTP_MAX_ATTEMPTS, 5),
-    otpDevExpose: parseBoolEnv(env.OTP_DEV_EXPOSE, nodeEnv !== "production"),
+    otpDevExpose: nodeEnv !== "production" && parseBoolEnv(env.OTP_DEV_EXPOSE, true),
+    otpSmtpHost: env.OTP_SMTP_HOST ?? "",
+    otpSmtpPort: parseIntEnv(env.OTP_SMTP_PORT, 587),
+    otpSmtpSecure: parseBoolEnv(env.OTP_SMTP_SECURE, env.OTP_SMTP_PORT === "465"),
+    otpSmtpUser: env.OTP_SMTP_USER ?? "",
+    otpSmtpPassword: env.OTP_SMTP_PASSWORD ?? "",
+    otpFromEmail: env.OTP_FROM_EMAIL ?? "",
+    otpFromName: env.OTP_FROM_NAME ?? "FilsPay",
 
     argon2MemoryKib: parseIntEnv(env.ARGON2_MEMORY_KIB, 19_456),
     argon2TimeCost: parseIntEnv(env.ARGON2_TIME_COST, 2),
