@@ -36,6 +36,16 @@
     --fp-ink-3: #6b6e68;
     --fp-ink-inverse: #ffffff;
 
+    /* On dark surfaces (charcoal admin header, sign-in) and on burgundy
+       (impersonation banner). All pass AA on their surface: on-dark 12.3:1,
+       on-dark-2 8.4:1, on-dark-3 5.1:1, on-brand-2 7.3:1. */
+    --fp-on-dark: #f1eee8;
+    --fp-on-dark-2: #c9c6bf;
+    --fp-on-dark-3: #9d9a93;
+    --fp-charcoal-raised: #3a3c39;
+    --fp-charcoal-line: #55574f;
+    --fp-on-brand-2: #f2dde1;
+
     /* Lines */
     --fp-line: #e9e3d8;
     --fp-line-strong: #d9d0c0;

@@ -841,8 +841,8 @@
     border-color: var(--fp-ink-2);
   }
 
-  .dash-shell :is(input, select, textarea):focus-visible,
-  .dash-auth input:focus-visible {
+  .dash-shell :is(input, select, textarea):focus,
+  .dash-auth input:focus {
     outline: none;
     border-color: var(--fp-burgundy);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--fp-burgundy) 22%, transparent);
@@ -1978,6 +1978,31 @@
 
   .dash-field-grow {
     flex: 1 1 18rem;
+  }
+
+  /* dash-button-link's link styles are scoped to .dash-shell; the sign-in
+     and not-found pages use .dash-auth, so mirror them there. */
+  .dash-auth a.dash-button-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--fp-space-2);
+    border-radius: var(--fp-radius-md);
+    background: var(--fp-burgundy);
+    color: var(--fp-ink-inverse);
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .dash-auth a.dash-button-link:hover {
+    background: var(--fp-burgundy-hover);
+    color: var(--fp-ink-inverse);
+  }
+
+  .dash-auth a.dash-not-found-action {
+    width: 100%;
+    min-height: 2.75rem;
+    font-size: var(--fp-text-base);
   }
 
   .dash-actions-end {

@@ -142,7 +142,7 @@
     border-color: var(--fp-ink-2);
   }
 
-  :is(input, select, textarea):focus-visible {
+  :is(input, select, textarea):focus {
     outline: none;
     border-color: var(--fp-burgundy);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--fp-burgundy) 22%, transparent);
@@ -197,7 +197,7 @@
 
   .admin-header {
     background: var(--fp-charcoal);
-    color: #f1eee8;
+    color: var(--fp-on-dark);
   }
 
   .admin-header-inner {
@@ -262,7 +262,7 @@
     align-items: center;
     gap: var(--fp-space-2);
     padding: 0 var(--fp-space-3);
-    color: #c9c6bf;
+    color: var(--fp-on-dark-2);
     font-size: 0.8125rem;
     font-weight: 500;
     text-decoration: none;
@@ -293,7 +293,7 @@
   }
 
   .admin-nav a .admin-icon {
-    color: #9d9a93;
+    color: var(--fp-on-dark-3);
   }
 
   .admin-nav a.active .admin-icon {
@@ -318,7 +318,7 @@
   }
 
   .admin-identity-email {
-    color: #c9c6bf;
+    color: var(--fp-on-dark-2);
     font-size: 0.8125rem;
     white-space: nowrap;
     overflow: hidden;
@@ -341,14 +341,14 @@
 
   .admin-header .admin-button {
     background: transparent;
-    border-color: #55574f;
-    color: #f1eee8;
+    border-color: var(--fp-charcoal-line);
+    color: var(--fp-on-dark);
     box-shadow: none;
   }
 
   .admin-header .admin-button:hover:not(:disabled) {
-    background: #3a3c39;
-    border-color: #77796f;
+    background: var(--fp-charcoal-raised);
+    border-color: var(--fp-on-dark-3);
   }
 
   .admin-button.admin-menu-toggle {
@@ -449,12 +449,12 @@
   }
 
   .impersonation-banner code {
-    color: #fbe9c8;
+    color: var(--fp-sand);
   }
 
   .impersonation-meta {
     display: block;
-    color: #f2dde1;
+    color: var(--fp-on-brand-2);
     font-size: 0.8125rem;
   }
 
@@ -475,7 +475,7 @@
     flex-basis: 100%;
     padding: var(--fp-space-2) var(--fp-space-3);
     border-radius: var(--fp-radius-sm);
-    background: rgba(0, 0, 0, 0.2);
+    background: rgba(41, 43, 41, 0.3);
     font-weight: 600;
   }
 
@@ -1771,7 +1771,7 @@
     display: flex;
     align-items: center;
     gap: var(--fp-space-2);
-    color: #b9b6ae;
+    color: var(--fp-on-dark-2);
     font-size: 0.75rem;
   }
 
@@ -1783,7 +1783,7 @@
   }
 
   .admin-auth .admin-loading {
-    color: #d8d5ce;
+    color: var(--fp-on-dark-2);
   }
 
   /* ---------- Responsive ---------- */
@@ -1831,7 +1831,7 @@
       right: 0;
       padding: var(--fp-space-3) var(--fp-space-4) var(--fp-space-4);
       background: var(--fp-charcoal);
-      border-top: 1px solid #3a3c39;
+      border-top: 1px solid var(--fp-charcoal-raised);
       box-shadow: var(--fp-shadow-2);
     }
 
@@ -1851,7 +1851,7 @@
     }
 
     .admin-header.is-open .admin-nav a.active {
-      background: #3a3c39;
+      background: var(--fp-charcoal-raised);
     }
 
     .admin-header.is-open .admin-nav a.active::after {
@@ -1868,7 +1868,7 @@
       margin-left: 0;
       justify-content: space-between;
       padding-top: var(--fp-space-3);
-      border-top: 1px solid #3a3c39;
+      border-top: 1px solid var(--fp-charcoal-raised);
     }
 
     .admin-header.is-open .admin-identity-email {

@@ -185,7 +185,7 @@ export function MerchantListPage() {
           </div>
         ) : null}
 
-        <div className="admin-table-wrap">
+        <div className="admin-table-wrap" tabIndex={0} role="region" aria-label="Table (scrolls sideways on small screens)">
           <table className="admin-table">
             <thead>
               <tr>

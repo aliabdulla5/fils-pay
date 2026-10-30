@@ -246,7 +246,7 @@ export function AdjustmentImportPage() {
             <ErrorMessage>{rowsError}</ErrorMessage>
           </div>
         ) : null}
-        <div className="admin-table-wrap">
+        <div className="admin-table-wrap" tabIndex={0} role="region" aria-label="Table (scrolls sideways on small screens)">
           <table className="admin-table">
             <thead>
               <tr>
@@ -279,7 +279,7 @@ export function AdjustmentImportPage() {
                   {openImportId === item.id ? (
                     <tr>
                       <td className="admin-subtable-cell" colSpan={4}>
-                        <div className="admin-subtable admin-table-wrap">
+                        <div className="admin-subtable admin-table-wrap" tabIndex={0} role="region" aria-label="Table (scrolls sideways on small screens)">
                           <table className="admin-table">
                             <thead>
                               <tr>

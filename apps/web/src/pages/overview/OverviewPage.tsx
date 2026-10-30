@@ -209,7 +209,7 @@ export function OverviewPage() {
             </div>
           </div>
         ) : null}
-        <div className="dash-table-wrap">
+        <div className="dash-table-wrap" tabIndex={0} role="region" aria-label="Table (scrolls sideways on small screens)">
           <table className="dash-table">
             <thead>
               <tr>
@@ -257,7 +257,7 @@ export function OverviewPage() {
           title="Payout trends"
           aside={payouts ? <StalenessBadge readModelAsOf={payouts.readModelAsOf} live={payouts.live} /> : null}
         >
-          <div className="dash-table-wrap">
+          <div className="dash-table-wrap" tabIndex={0} role="region" aria-label="Table (scrolls sideways on small screens)">
             <table className="dash-table">
               <thead>
                 <tr>
@@ -305,7 +305,7 @@ export function OverviewPage() {
             topLinks ? <StalenessBadge readModelAsOf={topLinks.readModelAsOf} live={topLinks.live} /> : null
           }
         >
-          <div className="dash-table-wrap">
+          <div className="dash-table-wrap" tabIndex={0} role="region" aria-label="Table (scrolls sideways on small screens)">
             <table className="dash-table">
               <thead>
                 <tr>

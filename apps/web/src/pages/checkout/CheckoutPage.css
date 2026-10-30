@@ -128,10 +128,11 @@ body:has(.checkout-root) {
   padding: 0;
   background: var(--co-surface);
   border: 1px solid var(--co-line);
-  border-radius: 14px;
+  border-radius: 10px;
+  /* Same elevation as the shared --fp-shadow-2 token. */
   box-shadow:
-    0 1px 2px rgba(41, 43, 41, 0.05),
-    0 24px 48px -28px rgba(41, 43, 41, 0.28);
+    0 12px 32px -12px rgba(41, 43, 41, 0.22),
+    0 2px 6px rgba(41, 43, 41, 0.06);
   overflow: hidden;
 }
 
@@ -255,7 +256,7 @@ body:has(.checkout-root) {
   margin: 0 0 1rem;
   padding: 0.75rem 0.875rem;
   border: 1px solid var(--co-danger-line);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--co-danger-tint);
   color: var(--co-danger);
   font-size: 0.875rem;
@@ -309,7 +310,7 @@ body:has(.checkout-root) {
   color: var(--co-ink);
   background: var(--co-surface);
   border: 1px solid var(--co-line-input);
-  border-radius: 8px;
+  border-radius: 6px;
   outline: none;
   transition:
     border-color 150ms ease,
@@ -333,7 +334,7 @@ body:has(.checkout-root) {
   border-color: var(--co-ink-2);
 }
 
-.checkout-form input:focus-visible {
+.checkout-form input:focus {
   border-color: var(--co-burgundy);
   box-shadow: 0 0 0 3px rgba(118, 45, 61, 0.2);
 }
@@ -341,10 +342,9 @@ body:has(.checkout-root) {
 /* Native constraint validation, styled only after the user has interacted. */
 .checkout-form input:user-invalid {
   border-color: var(--co-danger);
-  background: #fffafa;
 }
 
-.checkout-form input:user-invalid:focus-visible {
+.checkout-form input:user-invalid:focus {
   box-shadow: 0 0 0 3px rgba(163, 57, 43, 0.18);
 }
 
@@ -397,7 +397,7 @@ body:has(.checkout-root) {
   margin-top: 0.25rem;
   padding: 0 1rem;
   border: 0;
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--co-burgundy);
   color: #fff;
   font-family: var(--co-font);
@@ -536,7 +536,7 @@ body:has(.checkout-root) {
 .checkout-next {
   margin-top: 0.25rem;
   padding: 0.75rem 1rem;
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--co-surface-2);
   color: var(--co-ink-2);
   font-size: 0.8125rem;

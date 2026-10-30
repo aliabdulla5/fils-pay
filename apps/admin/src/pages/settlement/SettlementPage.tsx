@@ -191,7 +191,7 @@ export function SettlementPage() {
                   {runResults.length === 1 ? "" : "s"} processed.
                 </div>
                 {runResults.length > 0 ? (
-                  <div className="admin-result-body admin-table-wrap">
+                  <div className="admin-result-body admin-table-wrap" tabIndex={0} role="region" aria-label="Table (scrolls sideways on small screens)">
                     <table className="admin-table">
                       <thead>
                         <tr>
@@ -296,7 +296,7 @@ export function SettlementPage() {
                 </div>
                 <div className="admin-result-body">
                   {mdrAdjusted.length > 0 ? (
-                    <div className="admin-table-wrap">
+                    <div className="admin-table-wrap" tabIndex={0} role="region" aria-label="Table (scrolls sideways on small screens)">
                       <table className="admin-table">
                         <thead>
                           <tr>
@@ -423,7 +423,7 @@ export function SettlementPage() {
                 </div>
                 <div className="admin-result-body">
                   {rebuildChanged.length > 0 ? (
-                    <div className="admin-table-wrap">
+                    <div className="admin-table-wrap" tabIndex={0} role="region" aria-label="Table (scrolls sideways on small screens)">
                       <table className="admin-table">
                         <thead>
                           <tr>

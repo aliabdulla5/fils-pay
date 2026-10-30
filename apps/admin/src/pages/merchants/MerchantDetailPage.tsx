@@ -433,7 +433,7 @@ export function MerchantDetailPage() {
               </div>
             ) : null}
 
-            <div className="admin-table-wrap">
+            <div className="admin-table-wrap" tabIndex={0} role="region" aria-label="Table (scrolls sideways on small screens)">
               <table className="admin-table">
                 <thead>
                   <tr>
@@ -496,7 +496,7 @@ export function MerchantDetailPage() {
               <Link to={`/webhooks/${merchant.id}`}>Replay a batch of deliveries for this merchant</Link>
             }
           >
-            <div className="admin-table-wrap">
+            <div className="admin-table-wrap" tabIndex={0} role="region" aria-label="Table (scrolls sideways on small screens)">
               <table className="admin-table">
                 <thead>
                   <tr>
@@ -528,7 +528,7 @@ export function MerchantDetailPage() {
           </Card>
 
           <Card title="Recent settlement batches" id="merchant-batches">
-            <div className="admin-table-wrap">
+            <div className="admin-table-wrap" tabIndex={0} role="region" aria-label="Table (scrolls sideways on small screens)">
               <table className="admin-table">
                 <thead>
                   <tr>
@@ -564,7 +564,7 @@ export function MerchantDetailPage() {
           </Card>
 
           <Card title="KYC review history" id="merchant-kyc-history">
-            <div className="admin-table-wrap">
+            <div className="admin-table-wrap" tabIndex={0} role="region" aria-label="Table (scrolls sideways on small screens)">
               <table className="admin-table">
                 <thead>
                   <tr>

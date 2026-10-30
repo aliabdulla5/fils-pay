@@ -103,7 +103,7 @@ export function WebhookEndpointListPage() {
       {error ? <ErrorMessage>{error}</ErrorMessage> : null}
 
       <div className="dash-card">
-        <div className="dash-table-wrap">
+        <div className="dash-table-wrap" tabIndex={0} role="region" aria-label="Table (scrolls sideways on small screens)">
           <table className="dash-table">
             <thead>
               <tr>
