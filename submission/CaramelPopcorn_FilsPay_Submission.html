@@ -28,23 +28,22 @@
 <section class="cover">
   <p class="muted">The Handover / Case File — FilsPay</p>
   <h1>FilsPay Submission</h1>
-  <p><b>Team:</b> <span class="todo">[Team name]</span></p>
+  <p><b>Team:</b> Caramel Popcorn</p>
   <table>
     <tr><th>Member</th><th>Owned</th></tr>
-    <tr><td><span class="todo">[Name]</span></td><td><span class="todo">[e.g. settlement &amp; money fixes]</span></td></tr>
-    <tr><td><span class="todo">[Name]</span></td><td><span class="todo">[e.g. deployment &amp; load test]</span></td></tr>
-    <tr><td><span class="todo">[Name]</span></td><td><span class="todo">[e.g. UI, slides]</span></td></tr>
+    <tr><td>Ali Abdulla</td><td>Security and money review, bug fixes across the API, settlement and reporting, refunds end to end, load hardening and load testing, AI setup, findings report and submission documents</td></tr>
+    <tr><td>Ali Aldoseri</td><td>Docker build and deployment fixes, and the visual design of checkout, the merchant dashboard and the admin console</td></tr>
   </table>
   <h3>Live URLs</h3>
   <table>
-    <tr><th>Checkout</th><td><span class="todo">[https://…/pay/&lt;token&gt;]</span></td></tr>
-    <tr><th>Merchant dashboard</th><td><span class="todo">[https://…]</span></td></tr>
-    <tr><th>Admin console</th><td><span class="todo">[https://…]</span></td></tr>
-    <tr><th>Public API</th><td><span class="todo">[https://…/healthz]</span></td></tr>
+    <tr><th>Checkout</th><td>http://168.144.214.150/pay/&lt;payment-link-token&gt; (create a link in the dashboard to get a token)</td></tr>
+    <tr><th>Merchant dashboard</th><td>http://168.144.214.150/dashboard/login</td></tr>
+    <tr><th>Admin console</th><td>http://168.144.214.150:8080/login</td></tr>
+    <tr><th>Public API</th><td>http://168.144.214.150/v1/… (health: http://168.144.214.150/healthz)</td></tr>
   </table>
   <h3>Repository</h3>
-  <p>Public fork: <span class="todo">[https://github.com/aliabdulla5/fils-pay — confirm this is your public fork]</span><br>
-     Last commit before the deadline: <span class="todo">[commit id]</span></p>
+  <p>Public fork: <a href="https://github.com/aliabdulla5/fils-pay">https://github.com/aliabdulla5/fils-pay</a><br>
+     Last commit before the deadline: <span class="todo">[fill in at the deadline]</span></p>
 </section>
 
 <h2>1. Summary</h2>
@@ -62,7 +61,7 @@
 <p>Locked tests that assert the buggy behaviour make the drift look correct.</p>
 
 <h2>2. Architecture and deployment</h2>
-<div class="diagram">Internet ── TLS terminator <span class="todo">[your host / Dilmune]</span>
+<div class="diagram">Internet ── http://168.144.214.150 (Dilmune Cloud server)
    │
    ▼
  edge (nginx) :80  web app: checkout + merchant dashboard, /v1 → api
@@ -80,6 +79,7 @@
  daily close 00:15 Asia/Bahrain</div>
 <p>Only the edge faces the internet. The api and Postgres ports are bound to the host's loopback, and settlement's internal API has no published port at all.</p>
 <ul>
+  <li><b>Hosting:</b> a Dilmune Cloud Ubuntu server. nginx serves the web app and <code>/v1</code> on :80 and the admin console on :8080, the same layout as the compose <code>edge</code> service (<code>ops/nginx.conf</code>). The demo is served over plain HTTP on an IP address; TLS needs a domain name.</li>
   <li><b>Redeploy (one command):</b> <code>docker compose -f ops/docker-compose.yml up -d --build</code>, preceded on schema changes by <code>docker compose -f ops/docker-compose.yml run --rm migrate</code>. The <code>seed</code> job is behind a profile and never runs on <code>up</code>, because it truncates the ledger.</li>
   <li><b>Secrets:</b> <code>ops/.env</code>, which is gitignored and read by compose for <code>${VAR}</code> substitution (template: <code>ops/.env.docker.example</code>). <code>NODE_ENV</code> defaults to <code>production</code>, and production refuses to boot without <code>SETTLEMENT_INTERNAL_TOKEN</code>, <code>ACQUIRER_CALLBACK_SIGNING_SECRET</code> and a 32-byte <code>WEBHOOK_SECRET_ENCRYPTION_KEY</code>. One acquirer signing secret was committed to git history in the past and must be rotated with the acquirer.</li>
   <li><b>Health checks and restarts:</b> every service has <code>restart: unless-stopped</code>. The api has a container health check on <code>/healthz</code> (every 10 s), and the edge starts only once the api is healthy. Postgres has its own health check. Measured: after the api process was killed with <code>SIGKILL</code> mid-traffic, it was serving again <b>5 seconds</b> later (see section 3).</li>
@@ -199,6 +199,7 @@
 <tr><td>INTEGER platform counter, REAL lifetime estimate (73–74)</td><td>Needs a DBA-approved migration</td><td>Migrate both to BIGINT fils; the clamp (73) prevents the tier flip meanwhile</td></tr>
 <tr><td>Outbox read by id, not commit order (70)</td><td>Design change</td><td>Use the <code>xid8</code>/<code>pg_snapshot</code> query mentioned in the handover</td></tr>
 <tr><td>Locked tests asserting old behaviour (7 API, 2 Go, 1 script)</td><td>Tests must not be edited</td><td>Replace them with tests that assert the ADRs</td></tr>
+<tr><td>Live demo over plain HTTP on an IP address</td><td>No domain name yet, so no TLS certificate</td><td>Put the edge behind a domain with TLS (e.g. Caddy with Let's Encrypt), then run with secure cookies</td></tr>
 <tr><td>Historical data (F77 duplicates, F78 stranded captures, F88 double credits)</td><td>Fixes are forward-only; nothing was run on real data</td><td>Read-only detection queries first, then finance-approved corrections</td></tr>
 </table>
 <p><b>Plausible, not confirmed:</b></p>
@@ -211,16 +212,39 @@
 </ul>
 
 <h2 class="page">5. UI and UX changes</h2>
+<style>.shots{display:flex;gap:8pt;margin:4pt 0 10pt}.shots figure{flex:1;margin:0}.shots img{width:100%;border:0.6pt solid #bbb}.shots figcaption{font-size:8.5pt;color:#555}</style>
+<h3>Refunded transactions and reconciliation no longer crash the dashboard (F81)</h3>
+<p>Refund timeline rows are negative by design, and a reconciliation gap or pending figure can be negative. The dashboard's money formatter refused negative amounts, so after FP-300 shipped, every refunded transaction and the reconciliation page showed an error screen instead of data. The screenshots show the same session, the same data and the same partial refund (7.500 BD back on a 426.987 BD capture), with only the formatter changed.</p>
+<div class="shots">
+  <figure><img src="evidence/screenshots/refunded-transaction_before.png"><figcaption>Before: transaction detail crashes on the −7.500 BD refund row</figcaption></figure>
+  <figure><img src="evidence/screenshots/refunded-transaction_after.png"><figcaption>After: status partially_refunded, refund row −7.500 BD</figcaption></figure>
+</div>
+<div class="shots">
+  <figure><img src="evidence/screenshots/reconciliation_before.png"><figcaption>Before: reconciliation crashes on a −7.312 BD pending figure</figcaption></figure>
+  <figure><img src="evidence/screenshots/reconciliation_after.png"><figcaption>After: the refund reconciles, gap 0.000 BD</figcaption></figure>
+</div>
+<h3>Other user-facing fixes without a visual difference</h3>
 <table>
-<tr><th>Change</th><th>Why it mattered</th><th>Before / after</th></tr>
-<tr><td>Dashboard renders negative amounts (refund rows, reconciliation gap)</td><td>Refunded transactions and the reconciliation page went blank</td><td><span class="todo">[screenshots: detail page of a refunded transaction]</span></td></tr>
-<tr><td>Session cookie lasts the session's 12 h</td><td>Merchants were signed out 10 minutes after login</td><td><span class="todo">[screenshot / short recording]</span></td></tr>
-<tr><td>Admin run-batch defaults to the last completed Bahrain day</td><td>Around midnight it defaulted to two days ago</td><td><span class="todo">[screenshots]</span></td></tr>
-<tr><td>KYC documents with Arabic filenames download</td><td>Download failed with 500</td><td><span class="todo">[screenshots]</span></td></tr>
+<tr><th>Change</th><th>Why it mattered</th><th>Evidence</th></tr>
+<tr><td>Session cookie lasts the session's 12 h (F82)</td><td>Merchants were signed out 10 minutes after every login</td><td>The verify response now sets <code>Max-Age=43200</code></td></tr>
+<tr><td>KYC documents with Arabic filenames download (F85)</td><td>The download failed with a 500</td><td>RFC 6266 <code>filename*</code> header; reproduced before and after</td></tr>
+<tr><td>Admin run-batch defaults to the last completed Bahrain day (F92)</td><td>Between 00:00 and 03:00 it defaulted to two days ago</td><td>Date arithmetic in UTC+3</td></tr>
+<tr><td>Checkout under load: overloaded or restarting api answers 503 + Retry-After</td><td>Buyers saw slow 500s or 502s</td><td>Section 3</td></tr>
 </table>
+<p class="todo">[Ali Aldoseri: visual design changes to checkout, dashboard and admin console, with before and after screenshots]</p>
 
 <h2>6. AI usage</h2>
-<p><b>Setup.</b> Claude Code (VS Code extension) with read and write access to the repository, a disposable Postgres 16 container (<code>filspay-test</code>) with one fresh database per verification run, and the Go and Node toolchains. Every fix was verified on an untouched export of <code>HEAD</code> plus only our patch, so concurrent edits in the shared working tree could not affect results. <span class="todo">[List your committed AI setup files here: agent instructions, custom commands, permission rules, helper scripts, and where they live.]</span> We deliberately did <i>not</i> follow the repository's own agent files where they contradict the ADRs: "amounts are cents", "settlement windows are UTC", "docs are the source of truth".</p>
+<p><b>Setup.</b> Claude Code (VS Code extension) with read and write access to the repository, a disposable Postgres 16 container (<code>filspay-test</code>) with one fresh database per verification run, and the Go and Node toolchains. Every fix was verified on an untouched export of <code>HEAD</code> plus only our patch, so concurrent edits in the shared working tree could not affect results. The team used three assistants (Claude Code, Codex and Gemini CLI) and gave them one shared rule set. All of it is committed:</p>
+<table>
+<tr><th>File</th><th>What it does</th></tr>
+<tr><td><code>AGENTS.md</code></td><td>The shared rules, read directly by Codex. Correct facts (fils, the Bahrain business day, discount order, ledger-based balances), what must not change without sign-off, the list of locked tests that fail on purpose (so no agent "fixes" one by reverting a bug fix), and the working rules: leads are not proof, reproduce before fixing, never seed a real database, never claim an unrun test passed.</td></tr>
+<tr><td><code>CLAUDE.md</code>, <code>GEMINI.md</code></td><td>Import <code>AGENTS.md</code> for Claude Code and Gemini CLI, so all three tools follow the same rules.</td></tr>
+<tr><td><code>.claude/settings.json</code></td><td>Claude Code permission rules. <b>Deny:</b> editing <code>packages/money</code>, its Go mirror or any test file, force-pushes, <code>git reset --hard</code>. <b>Ask first:</b> seeding, committing, pushing, <code>rm</code>. <b>Allow:</b> tests, typecheck, read-only git.</td></tr>
+<tr><td><code>.claude/commands/</code></td><td>Custom commands. <code>/verify</code> runs the full verification and classifies every failure. <code>/triage-finding</code> traces, reproduces (including against the original commit) and classifies a suspected defect. <code>/load-test</code> runs the checkout load test plus the integrity check.</td></tr>
+<tr><td><code>scripts/dev/verify.sh</code></td><td>Helper script. Creates a brand-new throwaway database, runs migrations, typecheck, every TypeScript suite, the scripts suite and <code>go vet</code>/<code>go test</code>, and prints one line per step.</td></tr>
+<tr><td><code>.cursorrules</code></td><td>Kept only as a pointer to <code>AGENTS.md</code>. Its old contents, like the old <code>CLAUDE.md</code>, stated the planted false rules.</td></tr>
+</table>
+<p> We deliberately did <i>not</i> follow the repository's own agent files where they contradict the ADRs: "amounts are cents", "settlement windows are UTC", "docs are the source of truth".</p>
 
 <h3>How we prompted the review, and why</h3>
 <p>We did not ask the AI to "find bugs". We gave it one long, structured brief, written to keep it on the rails the repository itself kept knocking it off. The brief, condensed:</p>
