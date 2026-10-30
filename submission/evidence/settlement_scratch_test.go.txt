@@ -1,0 +1,66 @@
+// Scratch Go verification used during the review (run in a disposable copy of HEAD + patch,
+// package settlement, against a freshly migrated Postgres). Not part of the repository's test suite.
+package settlement
+
+import (
+	"context"
+	"errors"
+	"math"
+	"testing"
+	"time"
+)
+
+func TestScratch_OpenBusinessDayIsRefused(t *testing.T) {
+	pool := mustPool(t)
+	merchantID := insertActiveMerchant(t, pool, 250)
+	today := time.Now().In(BusinessDayLocation())
+	if _, err := CloseBatch(context.Background(), pool, merchantID, today); !errors.Is(err, ErrBusinessDayNotComplete) {
+		t.Fatalf("CloseBatch(today) err = %v", err)
+	}
+	if _, err := RunDailyBatch(context.Background(), pool, today.AddDate(0, 0, 1), &merchantID); !errors.Is(err, ErrBusinessDayNotComplete) {
+		t.Fatalf("RunDailyBatch(tomorrow) err = %v", err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM settlement_batches WHERE merchant_id = $1`, merchantID); n != 0 {
+		t.Fatalf("open day left %d batch rows", n)
+	}
+	if _, err := CloseBatch(context.Background(), pool, merchantID, today.AddDate(0, 0, -1)); err != nil {
+		t.Fatalf("CloseBatch(yesterday): %v", err)
+	}
+}
+
+func TestScratch_PayoutRecordsOneDisbursementPerBatch(t *testing.T) {
+	pool := mustPool(t)
+	merchantID := insertActiveMerchant(t, pool, 250)
+	businessDate := time.Date(2026, 2, 10, 0, 0, 0, 0, time.UTC)
+	start, _ := BusinessDayWindow(businessDate)
+	insertCaptureEvent(t, pool, merchantID, 250, 100_000, start.Add(2*time.Hour))
+	closed, err := CloseBatch(context.Background(), pool, merchantID, businessDate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := PayoutBatch(context.Background(), pool, closed.BatchID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM settlement_payout_disbursements WHERE settlement_batch_id = $1 AND amount_fils = $2`, closed.BatchID, int64(closed.NetPayoutFils)); n != 1 {
+		t.Fatalf("disbursement rows = %d, want 1", n)
+	}
+}
+
+func TestScratch_PlatformCounterClampsInsteadOfWrapping(t *testing.T) {
+	pool := mustPool(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	if err := RecordPlatformProcessedVolume(ctx, tx, 2_100_000_000, 100_000_000); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := ReadAndLockPlatformProcessedFils(ctx, tx)
+	if got != math.MaxInt32 || VolumeTierMdrBonusBps(got) != 15 {
+		t.Fatalf("counter = %d", got)
+	}
+}

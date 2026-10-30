@@ -101,7 +101,12 @@ export async function updateBusinessProfile(
   merchantId: string,
   patch: BusinessProfilePatch,
 ): Promise<BusinessProfile> {
-  const entries = Object.entries(patch).filter(([, value]) => value !== undefined) as Array<
+  // Only keys PATCHABLE_COLUMNS defines. The body is untyped JSON: any other
+  // key looked up `undefined` (or an Object.prototype member) as its column
+  // and the UPDATE failed with a 500 instead of ignoring the field.
+  const entries = Object.entries(patch).filter(
+    ([key, value]) => value !== undefined && Object.hasOwn(PATCHABLE_COLUMNS, key),
+  ) as Array<
     [keyof BusinessProfilePatch, string | null]
   >;
 

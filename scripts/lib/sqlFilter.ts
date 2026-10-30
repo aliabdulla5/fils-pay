@@ -7,7 +7,12 @@ export function buildWhere(
   for (const [col, val] of Object.entries(filters)) {
     if (val === undefined || val === null) continue;
     if (Array.isArray(val)) {
-      if (val.length === 0) continue;
+      // An empty list matches nothing. Skipping it dropped the predicate, so
+      // buildDelete("holds", { id: [] }) became `DELETE FROM holds`.
+      if (val.length === 0) {
+        parts.push("FALSE");
+        continue;
+      }
       values.push(val);
       parts.push(`${col} = ANY($${idx}::uuid[])`);
       idx++;

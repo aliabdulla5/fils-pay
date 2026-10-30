@@ -22,6 +22,21 @@ import (
 // (RunDailyBatch) already filters merchants before ever calling it.
 var ErrMerchantNotEligible = errors.New("settlement: merchant not found or not eligible for settlement")
 
+// ErrBusinessDayNotComplete is returned when asked to close a business day
+// whose Asia/Bahrain window has not ended yet. Closing it early freezes the
+// batch, and every capture later that same day is left outside any batch for
+// good: the next run for that date is a no-op on the closed batch, and the
+// next day's window does not reach back.
+var ErrBusinessDayNotComplete = errors.New("settlement: business day has not ended yet")
+
+// AssertBusinessDayComplete refuses a business date whose window is still open.
+func AssertBusinessDayComplete(businessDate time.Time) error {
+	if _, end := BusinessDayWindow(businessDate); end.After(time.Now()) {
+		return ErrBusinessDayNotComplete
+	}
+	return nil
+}
+
 // BatchResult is CloseBatch's return value.
 type BatchResult struct {
 	BatchID       uuid.UUID
@@ -60,6 +75,9 @@ type eligibleEvent struct {
 func CloseBatch(ctx context.Context, db *pgxpool.Pool, merchantID uuid.UUID, businessDate time.Time) (BatchResult, error) {
 	start, end := BusinessDayWindow(businessDate)
 	batchDateOnly := time.Date(businessDate.Year(), businessDate.Month(), businessDate.Day(), 0, 0, 0, 0, time.UTC)
+	if err := AssertBusinessDayComplete(businessDate); err != nil {
+		return BatchResult{}, err
+	}
 
 	tx, err := db.Begin(ctx)
 	if err != nil {
@@ -430,6 +448,18 @@ func PayoutBatch(ctx context.Context, db *pgxpool.Pool, batchID uuid.UUID) (Payo
 		if err != nil {
 			return PayoutResult{}, fmt.Errorf("settlement: PayoutBatch: post payout legs: %w", err)
 		}
+
+		// The payout-rail instruction record, one per paid batch, in the
+		// same transaction as the legs (migration 0057). It used to be a side
+		// effect of the first settlement.paid webhook delivery: duplicated per
+		// endpoint and per replay, and missing for merchants with no endpoint.
+		_, err = tx.Exec(ctx, `
+			INSERT INTO settlement_payout_disbursements (settlement_batch_id, amount_fils, disbursement_reference)
+			VALUES ($1, $2, 'disb_' || gen_random_uuid())
+		`, batchID, netPayout)
+		if err != nil {
+			return PayoutResult{}, fmt.Errorf("settlement: PayoutBatch: record disbursement: %w", err)
+		}
 	}
 
 	// Runs unconditionally, including for a zero-payout batch: adding zero
@@ -487,6 +517,10 @@ type MerchantBatchOutcome struct {
 // between concurrent goroutines each trying to FOR UPDATE a
 // settlement_batches row.
 func RunDailyBatch(ctx context.Context, db *pgxpool.Pool, businessDate time.Time, onlyMerchant *uuid.UUID) (DailyBatchReport, error) {
+	if err := AssertBusinessDayComplete(businessDate); err != nil {
+		return DailyBatchReport{}, err
+	}
+
 	var merchantIDs []uuid.UUID
 	if onlyMerchant != nil {
 		merchantIDs = []uuid.UUID{*onlyMerchant}

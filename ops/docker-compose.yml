@@ -23,7 +23,9 @@ services:
       POSTGRES_PASSWORD: filspay_dev_password
       POSTGRES_DB: filspay
     ports:
-      - "5432:5432"
+      # Loopback only. The hosted box runs this same file, and "5432:5432"
+      # published Postgres, with the password above, on every interface.
+      - "127.0.0.1:5432:5432"
     volumes:
       - filspay_pgdata:/var/lib/postgresql/data
     healthcheck:

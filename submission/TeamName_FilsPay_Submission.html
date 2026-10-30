@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FilsPay Submission</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm; }
+  body { font: 10.5pt/1.45 -apple-system, "Helvetica Neue", Arial, sans-serif; color: #1a1a1a; }
+  h1 { font-size: 22pt; margin: 0 0 4pt; }
+  h2 { font-size: 15pt; margin: 18pt 0 6pt; border-bottom: 1.5pt solid #c8102e; padding-bottom: 3pt; page-break-after: avoid; }
+  h3 { font-size: 11.5pt; margin: 12pt 0 4pt; page-break-after: avoid; }
+  table { border-collapse: collapse; width: 100%; margin: 6pt 0; font-size: 9pt; }
+  th, td { border: 0.6pt solid #bbb; padding: 3pt 5pt; vertical-align: top; text-align: left; }
+  th { background: #f2f2f2; }
+  code { font: 8.8pt Menlo, monospace; background: #f4f4f4; padding: 0 2pt; }
+  pre { font: 8.5pt/1.35 Menlo, monospace; background: #f6f6f6; border: 0.6pt solid #ddd; padding: 6pt; white-space: pre-wrap; }
+  .todo { background: #fff3b0; padding: 0 3pt; font-weight: 600; }
+  .cover { page-break-after: always; }
+  .page { page-break-before: always; }
+  .finding { border-left: 3pt solid #c8102e; padding: 2pt 0 2pt 8pt; margin: 8pt 0; page-break-inside: avoid; }
+  .finding p { margin: 2pt 0; }
+  .muted { color: #555; }
+  .diagram { font: 8.5pt/1.3 Menlo, monospace; background: #fafafa; border: 0.6pt solid #ccc; padding: 8pt; white-space: pre; }
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <p class="muted">The Handover / Case File — FilsPay</p>
+  <h1>FilsPay Submission</h1>
+  <p><b>Team:</b> <span class="todo">[Team name]</span></p>
+  <table>
+    <tr><th>Member</th><th>Owned</th></tr>
+    <tr><td><span class="todo">[Name]</span></td><td><span class="todo">[e.g. settlement &amp; money fixes]</span></td></tr>
+    <tr><td><span class="todo">[Name]</span></td><td><span class="todo">[e.g. deployment &amp; load test]</span></td></tr>
+    <tr><td><span class="todo">[Name]</span></td><td><span class="todo">[e.g. UI, slides]</span></td></tr>
+  </table>
+  <h3>Live URLs</h3>
+  <table>
+    <tr><th>Checkout</th><td><span class="todo">[https://…/pay/&lt;token&gt;]</span></td></tr>
+    <tr><th>Merchant dashboard</th><td><span class="todo">[https://…]</span></td></tr>
+    <tr><th>Admin console</th><td><span class="todo">[https://…]</span></td></tr>
+    <tr><th>Public API</th><td><span class="todo">[https://…/healthz]</span></td></tr>
+  </table>
+  <h3>Repository</h3>
+  <p>Public fork: <span class="todo">[https://github.com/aliabdulla5/fils-pay — confirm this is your public fork]</span><br>
+     Last commit before the deadline: <span class="todo">[commit id]</span></p>
+</section>
+
+<h2>1. Summary</h2>
+<p><b>What we found.</b> The case file's 25 items split into 74 distinct defects. A second review pass found 18 more (inventory items 75–92). In total that is 92 findings in <code>docs/BUG_INVENTORY.md</code>: 79 confirmed and fixed, 10 confirmed and left open (most by explicit instruction, the rest needing DBA or design approval), and 1 rejected as intentional. The new ones include an unauthenticated reporting endpoint and a cross-merchant data leak. On the money side, a hold-expiry script deleted every hold on a quiet night, a capture replay double-credited a merchant's discount, and an admin re-run could close an unfinished business day and strand that day's later captures.</p>
+<p><b>What we fixed.</b> Every confirmed defect that the repository rules allow us to fix, each with the smallest change that works. Fixes are in the source and migrations; no test was edited.</p>
+<p><b>What we left alone.</b> Frozen code (<code>packages/money</code>, the Go money mirror), locked tests, the v1 partner API's 501 stubs, the deferred refund webhook, the documented <code>Math.random()</code> and display-name rules, and anything needing a DBA-approved migration (widening the platform volume counter, replacing the REAL lifetime estimate).</p>
+<p><b>Main root cause.</b> The same fact is computed in two places that drifted apart, and nothing checks that they agree. Examples:</p>
+<ul>
+  <li>The balance button versus the ledger walk.</li>
+  <li>Capture-time fees versus settlement fees.</li>
+  <li>The analytics rebuild versus the reporting worker.</li>
+  <li>Webhook delivery being used to write a payout record.</li>
+  <li>The "docs are truth" agent files contradicting the ADRs.</li>
+</ul>
+<p>Locked tests that assert the buggy behaviour make the drift look correct.</p>
+
+<h2>2. Architecture and deployment</h2>
+<div class="diagram">Internet
+   │  HTTPS (reverse proxy / TLS)  <span class="todo">[your proxy: Caddy/nginx — fill in]</span>
+   ├──► web  (checkout + merchant dashboard, static build)      <span class="todo">[port]</span>
+   ├──► admin (ops console, static build)                       <span class="todo">[port]</span>
+   └──► api  :3000   Fastify — merchant, checkout, admin, acquirer callbacks
+              │ webhook dispatcher runs in-process (LISTEN/NOTIFY + poll)
+              ▼
+         postgres :5432 (bound to 127.0.0.1 only)
+              ▲            ▲
+   settlement :8091 (internal only, bearer token)   reporting (no port; outbox consumer)
+   daemon: daily close 00:15 Asia/Bahrain</div>
+<ul>
+  <li><b>Redeploy:</b> <code>docker compose -f ops/docker-compose.yml up -d --build api settlement reporting</code>, with migrations run first: <code>docker compose -f ops/docker-compose.yml run --rm migrate</code>. The <code>seed</code> job sits behind a profile and never runs on <code>up</code>, because it truncates the ledger.</li>
+  <li><b>Secrets:</b> an <code>ops/.env</code> file that is gitignored, read by compose for <code>${VAR}</code> substitution (template: <code>ops/.env.docker.example</code>). <code>NODE_ENV</code> defaults to <code>production</code>, and production refuses to boot without <code>SETTLEMENT_INTERNAL_TOKEN</code>, <code>ACQUIRER_CALLBACK_SIGNING_SECRET</code> and <code>WEBHOOK_SECRET_ENCRYPTION_KEY</code>. One acquirer signing secret was committed to git history in the past and must be rotated with the acquirer.</li>
+  <li><b>Health checks:</b> the API serves <code>/healthz</code> (liveness) and <code>/readyz</code> (DB reachable), and Postgres has a compose healthcheck. <span class="todo">[Add your restart policy (e.g. <code>restart: unless-stopped</code>) and API limits (0.5 vCPU / 512 MB) if your deployment sets them.]</span></li>
+  <li><b>Redeploys and settlement runs:</b> each batch close and each payout is one Postgres transaction. On SIGTERM the daemon cancels its context, so an in-flight transaction commits or rolls back and never half-applies. Close and pay are idempotent per (merchant, date), so the next daemon tick, or <code>settlement run-batch --date=…</code>, completes the day safely. A run-batch for an unfinished business day is now refused (finding 78).</li>
+</ul>
+
+<h2>3. Capacity</h2>
+<p class="todo">[Fill in from your own load test on the deployed server: tool, scenario, users, p95 latency, error rate, graph.]</p>
+<p><b>Estimate from the code, not yet measured.</b> A checkout holds one pooled connection for the whole pay attempt: an advisory lock, then authorize, then capture, which keeps the row lock across the simulated acquirer call. The simulated acquirer takes 100–400 ms per call, so a checkout takes roughly 0.3–0.9 s. With <code>PG_POOL_MAX=5</code>, about 5 checkouts run at once, which is roughly 6–15 checkouts per second before requests queue on the pool. Raising the pool size is the first lever, within Postgres's connection budget on a 2 GB host.</p>
+<p><b>Bottleneck:</b> the API's database pool and the lock held across the acquirer call. <b>Overload behaviour today:</b> requests wait up to <code>PG_POOL_CONNECTION_TIMEOUT_MS</code> (5 s) for a connection, then fail with 500. There is no admission control or 429 yet. <span class="todo">[Describe what you added, e.g. proxy rate limits or a queue-length cap.]</span> Recovery: the pool and the process are stateless apart from Postgres, so a restart recovers without losing data (idempotency keys make client retries safe).</p>
+
+<h2 class="page">4. Findings report</h2>
+<p>The full inventory, with all 92 entries and their status, is <code>docs/BUG_INVENTORY.md</code>. Items 1–74 come from the first rounds (the sibling review); they are summarised in the table at the end of this section. Below are the 18 findings from the second review pass, written out in full.</p>
+<p class="muted">Method for every entry: we traced the path from input to side effect, checked the ADRs, handover and changelog for intended behaviour, reproduced the defect, applied the smallest fix, and verified it against a freshly migrated Postgres 16 database. We used an untouched copy of <code>HEAD</code> plus only our patch, so unrelated working-tree changes could not affect the results. The full suites were then re-run: no new failures (see Appendix).</p>
+
+<div class="finding"><h3>F75 — Reporting endpoint with no authentication</h3>
+<p><b>Symptom:</b> <code>GET /v1/reporting/export-summary</code> returned 500 for everyone. <b>Found/reproduced:</b> route map review; <code>app.inject</code> without credentials returned 500. <b>Root cause:</b> the route was registered without the <code>requireMerchantAuth</code> preHandler, so <code>request.merchantAuth!</code> was undefined. <b>Fix:</b> preHandler added. <b>Verified:</b> unauthenticated returns 401, authenticated returns 200. <b>Existing data:</b> none.</p></div>
+
+<div class="finding"><h3>F76 — Cross-merchant transaction report (IDOR)</h3>
+<p><b>Symptom:</b> any merchant could read a marketplace sub-merchant's transactions by putting <code>{"merchantId": "&lt;child&gt;"}</code> in the report filter. <b>Root cause:</b> <code>resolveReportMerchantId</code> checked only that the id was <i>some</i> parent's split child, not the caller's. <b>Fix:</b> require <code>parent_merchant_id = caller</code>. <b>Verified:</b> an unrelated merchant resolves to itself; the real parent still reaches its child. <b>Existing data:</b> none; audit access logs if exposure matters.</p></div>
+
+<div class="finding"><h3>F77 — Payout disbursement record written by webhook delivery</h3>
+<p><b>Symptom:</b> <code>settlement_payout_disbursements</code> got one row per active webhook endpoint and another per replay or archive restore, and none for merchants without an endpoint. <b>Root cause:</b> the record was a "pre-delivery effect" of the first <code>settlement.paid</code> delivery (attempt 0, which every replay starts at), contrary to migration 0057 ("written inside PayoutBatch's transaction, one row per paid batch"). <b>Fix:</b> written in <code>PayoutBatch</code> and <code>PayoutSplitBatch</code> inside the payout transaction; removed from the dispatcher. <b>Verified:</b> Go test against a real database: two payout calls produce exactly one row, carrying the batch's net. <b>Existing data:</b> historical duplicates and missing rows need a one-off reconciliation (proposed: keep the earliest row per batch, back-fill paid batches that have none). Not run.</p></div>
+
+<div class="finding"><h3>F78 — Closing an unfinished business day strands captures</h3>
+<p><b>Symptom:</b> an admin or CLI <code>run-batch</code> for today (or a future date) closed and paid the batch, and every capture later that day was never settled. <b>Root cause:</b> no guard; a closed batch makes the re-run a no-op, and the next day's window does not reach back. <b>Fix:</b> <code>ErrBusinessDayNotComplete</code> in <code>CloseBatch</code> and <code>RunDailyBatch</code>; the internal API returns 400 <code>business_day_not_complete</code>. The daemon is unaffected (it always closes yesterday). <b>Verified:</b> today and tomorrow are refused and leave no batch row; yesterday closes. <b>Existing data:</b> query for capture events with <code>settlement_batch_id IS NULL</code> older than one day to find any stranded funds.</p></div>
+
+<div class="finding"><h3>F79 — Analytics rebuild drops refunds and double-counts</h3>
+<p><b>Symptom:</b> after <b>Rebuild analytics</b>, refund totals were zero, and captures still waiting in the reporting worker's backlog were counted twice. <b>Root cause:</b> a second implementation that rebuilt from <code>transaction_events</code> instead of the outbox the worker consumes. <b>Fix:</b> rebuild from the outbox up to the worker's watermark, under the TRUNCATE lock, with the worker's own buckets. <b>Verified:</b> refunds kept; events past the watermark are not counted. <b>Existing data:</b> re-run the rebuild once.</p></div>
+
+<div class="finding"><h3>F80 — Hold expiry deletes every hold</h3>
+<p><b>Symptom:</b> on a night with no expired holds, <code>scripts/expire_holds.ts</code> ran <code>DELETE FROM holds</code> with no WHERE clause. <b>Root cause:</b> <code>buildWhere</code> silently dropped an empty array filter. <b>Fix:</b> an empty list now means <code>WHERE FALSE</code>; the script skips the delete when nothing matched, and runs in one transaction with <code>FOR UPDATE</code>. <b>Verified:</b> with one live hold and zero expired, nothing is deleted; with one expired, only that one. <b>Existing data:</b> holds already deleted cannot be restored from this table.</p></div>
+
+<div class="finding"><h3>F81 — Refunded transactions crash the merchant dashboard</h3>
+<p><b>Symptom:</b> the detail page of any refunded transaction, and the reconciliation page, failed to render. <b>Root cause:</b> the dashboard's <code>bhd()</code> called <code>toFils</code> without <code>allowNegative</code>, but refund timeline amounts are negative by design (migration 0044). <b>Fix:</b> signed formatting, as the admin console already does. <b>Verified:</b> <code>bhd(-4750)</code> returns <code>"-4.750 BHD"</code>.</p></div>
+
+<div class="finding"><h3>F82 — Merchants logged out after 10 minutes</h3>
+<p><b>Root cause:</b> OTP verify promoted the session to 12 h but never re-issued the cookie, which kept the pending session's 10-minute <code>maxAge</code>. <b>Fix:</b> re-issue the cookie, as admin verify does. <b>Verified:</b> the verify response sets <code>Max-Age=43200</code>.</p></div>
+
+<div class="finding"><h3>F83, F84, F85, F87 — Bad input returned 500 instead of 4xx</h3>
+<p>Four separate inputs reached the database or Node unchecked: unknown profile-PATCH keys (<code>SET undefined = $2</code>); invalid transaction <code>from</code>/<code>to</code> (<code>"NaN-NaN…"</code> sent to Postgres, although the route documents 400); a KYC filename outside latin-1, e.g. Arabic (Node rejects the header value with <code>ERR_INVALID_CHAR</code>); and an unknown <code>businessType</code> (DB CHECK violation). <b>Fixes:</b> allow-list the patchable keys, validate dates, use an RFC 6266 <code>filename*</code> header, validate business types. <b>Verified:</b> each reproduced as a 500 first, then returns 400 or 200 after the fix.</p></div>
+
+<div class="finding"><h3>F86 — Database published on all interfaces</h3>
+<p><b>Root cause:</b> compose mapped <code>5432:5432</code> with the committed dev password, and the hosted box runs the same file. <b>Fix:</b> bound to <code>127.0.0.1</code>.</p></div>
+
+<div class="finding"><h3>F88 — Capture replay double-credits a negotiated discount</h3>
+<p><b>Symptom/reproduction:</b> merchant at 250 bps with a 10% discount: capture 100 fils, then 1,000,000 fils, then replay the first capture's idempotency key. The merchant was credited 2.500 BD for the second capture <i>twice</i>. <b>Root cause:</b> the guard compared "adjustments &lt; capture events" and then adjusted the <i>latest</i> capture. A capture whose discount rounds to 0 never gets an adjustment, so the counts never catch up. <b>Fix:</b> match adjustments to the captures that are owed one, oldest first. <b>Verified:</b> the same reproduction now credits once. <b>Existing data:</b> look for transactions with more discount-adjustment groups than captures owed one.</p></div>
+
+<div class="finding"><h3>F89 — Inbound acquirer signature checked over re-serialized JSON</h3>
+<p><b>Symptom:</b> a correctly signed callback with whitespace or escaped unicode was rejected with 401. This is the incident log's "the incoming signature check has its own problems". <b>Root cause:</b> the HMAC was computed over <code>JSON.stringify(parsed body)</code>, not the bytes received. <b>Fix:</b> the callback route keeps the raw body and verifies that. <b>Verified:</b> a pretty-printed, escaped body signed over its raw bytes returns 200; a tampered body returns 401; malformed JSON returns 400.</p></div>
+
+<div class="finding"><h3>F90, F91, F92 — Smaller correctness gaps</h3>
+<p><b>F90:</b> credits accepted a future effective date, although the contract rejects it, so ledger legs were dated in a period that hasn't happened yet. Now dates after today's Bahrain date return 400. <b>F91:</b> split payouts never updated the lifetime payout estimate; fixed. <b>F92:</b> the admin console's default run-batch date was two days ago between 00:00 and 03:00 Bahrain time; it now defaults to the last completed Bahrain day.</p></div>
+
+<h3>Platform volume counter (item 73, partly fixed)</h3>
+<p>In Go, <code>current + int32(gross)</code> wrapped negative past 2,147,483,647 fils. That is only about 147,483 BD after the 2,000,000,000-fils volume tier switches on, so the 15 bps bonus would silently switch back off. The counter now stops at its maximum instead of wrapping; widening the INTEGER column still needs a DBA-approved migration.</p>
+
+<h3>Items 1–74 (first rounds), summary</h3>
+<table>
+<tr><th>Group</th><th>Items</th><th>Status</th></tr>
+<tr><td>Auth, OTP, impersonation, admin roles, KYC, API keys</td><td>4–6, 12–15, 18–20, 54, 60–61</td><td>Fixed</td></tr>
+<tr><td>Callbacks, webhooks, payout notices (FP-201, FP-240, 08-21)</td><td>7–9, 22, 55–57, 64</td><td>Fixed</td></tr>
+<tr><td>Config and Docker (prod in dev mode, destructive seed on <code>up</code>)</td><td>10–11, 67</td><td>Fixed</td></tr>
+<tr><td>Payment-link lock starving the pool (05-14 follow-up)</td><td>21</td><td>Fixed</td></tr>
+<tr><td>Refunds / FP-300 end to end</td><td>30–38</td><td>Fixed (v1 501 stub kept by instruction)</td></tr>
+<tr><td>Settlement: scheme residue, splits, paid-batch MDR, fee rates, daemon timing, test mode</td><td>42–46, 48, 62–63, 65–66</td><td>Fixed</td></tr>
+<tr><td>Balances, reporting, reconciliation</td><td>39–41, 51–53, 69</td><td>Fixed</td></tr>
+<tr><td>March sweep, CSV import, seed</td><td>23–29, 49–50, 59, 68</td><td>Fixed</td></tr>
+<tr><td>Retained by explicit instruction or approval needed</td><td>1–3, 16–17, 47, 71–72, 74; 73 partly fixed</td><td>Left as is (see Decisions)</td></tr>
+<tr><td>Open / no change needed</td><td>70 (commit-order outbox); 58 (jitter is correct)</td><td>Open / n/a</td></tr>
+</table>
+
+<h3>Root causes</h3>
+<table>
+<tr><th>Underlying cause</th><th>Findings it explains</th></tr>
+<tr><td><b>Duplicate implementations that drifted apart.</b> The same figure is derived twice and nothing reconciles the two.</td><td>Balance button vs CLI (52), analytics rebuild vs worker (F79), capture fee vs settlement fee (62–63, F88), disbursement record via webhooks (F77), fee display vs rate in effect (46)</td></tr>
+<tr><td><b>Check-then-act without a lock or a unique constraint.</b></td><td>Concurrent refunds (31), duplicate payout notices (22, 64), OTP guess limit (5–6), duplicate imports (27–28), hold expiry SELECT/DELETE (F80)</td></tr>
+<tr><td><b>Wrong unit or wrong clock.</b> Two-decimal assumptions in a three-decimal currency; UTC where the business day is Asia/Bahrain.</td><td>CSV 10× (49), discount scaling (50), March window (23), daemon at 03:15 (65), reporting dates (39), admin default date (F92)</td></tr>
+<tr><td><b>Trusting input.</b> Client clock, re-serialized bodies, unchecked keys and enums.</td><td>Expired link paid via client clock (FP-187), unsigned or replayed callbacks (7–8), inbound signature (F89), F83–F87</td></tr>
+<tr><td><b>Missing authorization at the route.</b></td><td>F75, F76, impersonation scope (12–15), bulk KYC (18–19), void role (54)</td></tr>
+<tr><td><b>Process.</b> Agent instruction files (<code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>.cursorrules</code>) state false facts: amounts in "cents", UTC settlement windows, "docs are truth". Locked tests pin the defects.</td><td>Explains why earlier AI-assisted changes kept reintroducing bugs (see section 6)</td></tr>
+</table>
+
+<h3>Decisions and open risks</h3>
+<table>
+<tr><th>Not changed</th><th>Why</th><th>Proposed safeguard</th></tr>
+<tr><td><code>Math.random()</code> for OTPs, invite codes, link slugs (1–3)</td><td>Explicit repository instruction</td><td>Switch to <code>crypto.randomInt</code>; it's a one-line change once policy allows</td></tr>
+<tr><td>Credit approval compares display names (16–17)</td><td>Explicit instruction</td><td>Compare <code>admin_user_id</code> (the handover's own rule)</td></tr>
+<tr><td>INTEGER platform counter, REAL lifetime estimate (73–74)</td><td>Needs a DBA-approved migration</td><td>Migrate both to BIGINT fils; the clamp (73) prevents the tier flip meanwhile</td></tr>
+<tr><td>Outbox read by id, not commit order (70)</td><td>Design change</td><td>Use the <code>xid8</code>/<code>pg_snapshot</code> query mentioned in the handover</td></tr>
+<tr><td>Locked tests asserting old behaviour (7 API, 2 Go, 1 script)</td><td>Tests must not be edited</td><td>Replace them with tests that assert the ADRs</td></tr>
+<tr><td>Historical data (F77 duplicates, F78 stranded captures, F88 double credits)</td><td>Fixes are forward-only; nothing was run on real data</td><td>Read-only detection queries first, then finance-approved corrections</td></tr>
+</table>
+<p><b>Plausible, not confirmed:</b></p>
+<ul>
+  <li>No private-address check on webhook URLs (SSRF): "send test event" reflects the response body.</li>
+  <li>One malformed outbox event stops the reporting worker; it needs a dead-letter policy.</li>
+  <li>Recalculate MDR re-prices at the flat <code>mdr_bps</code> and ignores fee schedules; the locked test name suggests this is intended.</li>
+  <li>The capture route has no merchant role gate.</li>
+  <li>Password login has no rate limit.</li>
+</ul>
+
+<h2 class="page">5. UI and UX changes</h2>
+<table>
+<tr><th>Change</th><th>Why it mattered</th><th>Before / after</th></tr>
+<tr><td>Dashboard renders negative amounts (refund rows, reconciliation gap)</td><td>Refunded transactions and the reconciliation page went blank</td><td><span class="todo">[screenshots: detail page of a refunded transaction]</span></td></tr>
+<tr><td>Session cookie lasts the session's 12 h</td><td>Merchants were signed out 10 minutes after login</td><td><span class="todo">[screenshot / short recording]</span></td></tr>
+<tr><td>Admin run-batch defaults to the last completed Bahrain day</td><td>Around midnight it defaulted to two days ago</td><td><span class="todo">[screenshots]</span></td></tr>
+<tr><td>KYC documents with Arabic filenames download</td><td>Download failed with 500</td><td><span class="todo">[screenshots]</span></td></tr>
+</table>
+
+<h2>6. AI usage</h2>
+<p><b>Setup.</b> Claude Code (VS Code extension) with read and write access to the repository, a disposable Postgres 16 container (<code>filspay-test</code>) with one fresh database per verification run, and the Go and Node toolchains. Every fix was verified on an untouched export of <code>HEAD</code> plus only our patch, so concurrent edits in the shared working tree could not affect results. <span class="todo">[List your committed AI setup files here: agent instructions, custom commands, permission rules, helper scripts, and where they live.]</span> We deliberately did <i>not</i> follow the repository's own agent files where they contradict the ADRs: "amounts are cents", "settlement windows are UTC", "docs are the source of truth".</p>
+
+<h3>Excerpt 1 — F80, hold expiry deletes every hold</h3>
+<p><b>Prompt and context:</b> a broad review prompt (review prior work, find new defects, fix, verify, don't edit tests) with the full repository, handover and ADRs. <b>AI answer (excerpt):</b></p>
+<pre>Critical finding: scripts/expire_holds.ts runs `DELETE FROM holds` with no WHERE clause on any night
+with no expired holds, because buildWhere drops empty arrays. That wipes every hold, active ones
+included. It also deletes rows the handover says must only be flipped to `expired`.</pre>
+<p><b>How we verified:</b> read <code>sqlFilter.buildWhere</code> (empty array → <code>continue</code>), then ran the patched script on a database with one live hold and zero expired holds: <code>matched 0 … deleted 0 row(s)</code>, and the live hold remained. With one expired hold, only that one was deleted. <b>What we changed:</b> empty list → <code>FALSE</code>; skip the delete when nothing matched; one transaction with <code>FOR UPDATE</code>. The AI kept the locked test's <code>DELETE … ANY($1)</code> text unchanged.</p>
+
+<h3>Excerpt 2 — F88, discount double credit</h3>
+<p><b>Context:</b> in its first report the AI listed this as only "plausible but unconfirmed". When we asked "is everything finished?", it went back and reproduced it. <b>AI output (excerpt):</b></p>
+<pre>statuses 201 200 200 after two captures: { n: 1, s: 2500 }
+after replaying capture 1: { n: 2, s: 5000 }
+Confirmed, and it's a real money defect. Replaying the first capture's idempotency key credits the
+merchant the second capture's 2.500 BD discount a second time.</pre>
+<p><b>Verified:</b> after the fix, the same script printed <code>after replaying capture 1: { n: 1, s: 2500 }</code>, and the discount/refund/transaction suites passed apart from the one pre-existing stale assertion. <b>Lesson:</b> labelling something "plausible" is not the end of the job; we required a reproduction before accepting or rejecting each lead.</p>
+
+<h3>Excerpt 3 — the AI was wrong about its own verification</h3>
+<p><b>What happened:</b> to test "our patch only", the AI generated a patch from a list of changed files and ran the suites on a clean copy. In zsh, <code>git diff -- $MINE</code> does not split the variable into separate paths, so the first patch was empty. A later attempt filtered a one-line file list with <code>grep -v</code>, which dropped every file. For a while, a "patched" copy contained only 2 of 16 fixes, while the AI described it as the full patch. <b>How it was noticed:</b> before building the submission, the AI compared every changed file in the clean copy against the working tree. The check printed <code>differs from live</code> for 16 files and the patch held only 8 diffs. <b>What we changed:</b> rebuilt the clean tree file by file, confirmed it was byte-identical to the patch result (<code>WT3_EQUALS_MINE</code>), and re-ran every suite and reproduction on it. A related catch: a previous AI-written inventory said <code>go test ./...</code> passed. The database-backed Go tests silently skip when <code>DATABASE_URL</code> is unset, and with a real database two tests fail.</p>
+
+<h2 class="page">Appendix</h2>
+<h3>Test results — clean <code>HEAD</code> + our patch, fresh migrated database (0001–0079)</h3>
+<table>
+<tr><th>Check</th><th>Result</th><th>Notes</th></tr>
+<tr><td><code>git diff --check</code>, <code>npm run typecheck</code>, <code>go vet</code></td><td>clean</td><td></td></tr>
+<tr><td>money / events / web</td><td>40/40, 4/4, 8/8</td><td></td></tr>
+<tr><td>API</td><td>355/362</td><td>7 locked tests assert pre-fix behaviour (4.75 BD = 475 fils, discount off the fee, fee display, exact jitter)</td></tr>
+<tr><td>Reporting</td><td>7/11 combined, 11/11 alone</td><td>Shared-database contamination from API tests</td></tr>
+<tr><td>Scripts</td><td>4/5</td><td>Locked test expects the UTC month; ADR-0007 requires the Bahrain month</td></tr>
+<tr><td>Go</td><td>all packages ok except <code>ledger</code> (2)</td><td><code>refresh_test.go</code> asserts the pre-ADR-0008 balance source (FP-203)</td></tr>
+</table>
+<p>The same set fails on the unmodified baseline: our changes add no new failures. Logs are in <code>submission/evidence/</code>.</p>
+</body>
+</html>

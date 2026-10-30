@@ -15,11 +15,11 @@ function bhd(fils: number): string {
   return `${formatBhd(toFils(fils, { allowNegative: true }))} BHD`;
 }
 
-// YA: browser-local yesterday
+// The last completed Asia/Bahrain business day (UTC+3, no DST), whatever
+// the browser's zone. Local "yesterday" printed with toISOString() was a UTC
+// date: from 00:00 to 03:00 Bahrain time it defaulted to two days ago.
 function yesterdayIso(): string {
-  const date = new Date();
-  date.setDate(date.getDate() - 1);
-  return date.toISOString().slice(0, 10);
+  return new Date(Date.now() + 3 * 3_600_000 - 86_400_000).toISOString().slice(0, 10);
 }
 
 /**

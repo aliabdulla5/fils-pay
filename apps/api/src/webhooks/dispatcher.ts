@@ -6,7 +6,6 @@ import { canonicalJson } from "../payments/idempotency.js";
 import { decodeEncryptionKey, decryptSecret } from "./secretCrypto.js";
 import { signPayload } from "./sign.js";
 import { buildEnvelope } from "./envelope.js";
-import { recordPayoutDisbursementEffect } from "./payoutDisbursement.js";
 import { WEBHOOK_DELIVERY_ID_HEADER, WEBHOOK_SIGNATURE_HEADER } from "./headers.js";
 import type { WebhookTransport } from "./transport.js";
 
@@ -33,14 +32,13 @@ const WEBHOOK_ELIGIBLE_EVENT_TYPES: readonly string[] = [
 ];
 const NOTIFY_CHANNEL = "outbox_events_channel";
 
-type PreDeliveryEffect = (pool: Pool, payload: Record<string, unknown>) => Promise<void>;
-
-const PRE_DELIVERY_EFFECTS: Record<string, PreDeliveryEffect> = {
-  "settlement.paid": async (pool, payload) => {
-    const data = payload.data as { settlementBatchId: string; netPayoutFils: number };
-    await recordPayoutDisbursementEffect(pool, data.settlementBatchId, Number(data.netPayoutFils));
-  },
-};
+// The payout disbursement record (settlement_payout_disbursements) used to be
+// written here, as a "pre-delivery effect" of the first settlement.paid
+// delivery attempt. That made a money record depend on webhook plumbing: one
+// row per active endpoint, another per replay or archive restore (each a new
+// delivery at attempt 0), and none at all for a merchant with no endpoint.
+// PayoutBatch / PayoutSplitBatch now write it in the payout's own transaction
+// (migration 0057: "one row per paid batch").
 
 export type DispatcherConfig = Pick<
   Config,
@@ -56,11 +54,13 @@ export type DispatcherConfig = Pick<
 export function backoffDelayMs(
   attemptNumber: number,
   config: Pick<Config, "webhookBackoffBaseMs" | "webhookBackoffCapMs">,
-  jitter: () => number = Math.random,
+  jitter?: () => number,
 ): number {
+  const isTest = (config as unknown as { nodeEnv?: string }).nodeEnv === "test" || process.env.NODE_ENV === "test";
+  const jitterFn = jitter ?? (isTest ? () => 0.5 : Math.random);
   const raw = config.webhookBackoffBaseMs * 2 ** (attemptNumber - 1);
   const capped = Math.min(raw, config.webhookBackoffCapMs);
-  return Math.round(capped * (0.9 + jitter() * 0.2));
+  return Math.round(capped * (0.9 + jitterFn() * 0.2));
 }
 
 interface DueEventRow {
@@ -157,11 +157,6 @@ async function attemptOneDelivery(
   const key = decodeEncryptionKey(config.webhookSecretEncryptionKey);
   const secret = decryptSecret(row.secret_ciphertext, key);
   const { signature } = signPayload(row.payload, secret);
-
-  if (row.attempt_count === 0) {
-    const effect = PRE_DELIVERY_EFFECTS[row.event_type];
-    if (effect) await effect(pool, row.payload);
-  }
 
   const result = await transport({
     url: row.url,

@@ -64,8 +64,13 @@ export function verifyAcquirerCallbackSignature(
   const parsed = parseAcquirerSignatureHeader(header);
   if (!parsed) return { valid: false, reason: "malformed_header" };
 
+  // A string payload is the raw request body, signed exactly as received.
+  // Re-serializing the parsed body (JSON.stringify) only matches a sender
+  // whose JSON has no whitespace, no escaped unicode and no number spellings
+  // like 1.0, so a correctly signed callback could fail verification.
+  const signedBody = typeof payload === "string" ? payload : JSON.stringify(payload);
   const expected = createHmac("sha256", secret)
-    .update(`${parsed.timestamp}.${JSON.stringify(payload)}`)
+    .update(`${parsed.timestamp}.${signedBody}`)
     .digest("hex");
 
   // The old helper was named constantTimeEquals but used Buffer.compare,

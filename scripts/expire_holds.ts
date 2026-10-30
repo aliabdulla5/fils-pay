@@ -14,9 +14,9 @@ import { buildDelete } from "./lib/sqlFilter.js";
 
 /** Holds that outlived their authorization window without being captured
  *  or released — the candidate set for tonight's cleanup. */
-export async function fetchExpiredHoldIds(client: Client): Promise<string[]> {
+export async function fetchExpiredHoldIds(client: Client, opts: { forUpdate?: boolean } = {}): Promise<string[]> {
   const result = await client.query<{ id: string }>(
-    `SELECT id FROM holds WHERE status = 'active' AND expires_at < now()`,
+    `SELECT id FROM holds WHERE status = 'active' AND expires_at < now()${opts.forUpdate ? " FOR UPDATE" : ""}`,
   );
   return result.rows.map((r) => r.id);
 }
@@ -39,13 +39,24 @@ async function main(): Promise<void> {
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
   try {
-    // FH: SELECT then DELETE, a hold could be captured in between. claude: "negligible window, fine."
-    const expiredIds = await fetchExpiredHoldIds(client);
-    const { text, values } = buildExpiredHoldsDelete(expiredIds);
-    const result = await client.query(text, values);
-    console.log(
-      `expire_holds: matched ${expiredIds.length} abandoned hold(s), deleted ${result.rowCount ?? 0} row(s)`,
-    );
+    // One transaction, candidate rows locked: a capture or void releasing one
+    // of these holds waits for us instead of having its hold deleted between
+    // the SELECT and the DELETE. A night with nothing expired deletes nothing
+    // — an empty id list used to drop the WHERE clause and empty the table.
+    await client.query("BEGIN");
+    try {
+      const expiredIds = await fetchExpiredHoldIds(client, { forUpdate: true });
+      let deleted = 0;
+      if (expiredIds.length > 0) {
+        const { text, values } = buildExpiredHoldsDelete(expiredIds);
+        deleted = (await client.query(text, values)).rowCount ?? 0;
+      }
+      await client.query("COMMIT");
+      console.log(`expire_holds: matched ${expiredIds.length} abandoned hold(s), deleted ${deleted} row(s)`);
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    }
   } finally {
     await client.end();
   }

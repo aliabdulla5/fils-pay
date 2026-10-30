@@ -1,0 +1,18 @@
+?   	github.com/filspay/settlement/cmd/settlement	[no test files]
+?   	github.com/filspay/settlement/internal/balances	[no test files]
+ok  	github.com/filspay/settlement/internal/config	1.177s
+?   	github.com/filspay/settlement/internal/db	[no test files]
+ok  	github.com/filspay/settlement/internal/internalapi	1.604s
+--- FAIL: TestRefreshBalanceCache_OverwritesDriftedCache (0.11s)
+    refresh_test.go:64: diff.Rebuilt = 0, want 25000
+    refresh_test.go:76: persisted cached_payable_fils = 0, want 25000
+--- FAIL: TestRefreshBalanceCache_SumsAcrossBatches (0.14s)
+    refresh_test.go:96: RefreshBalanceCache did not return a diff for merchant 4a388209-2820-4620-a50e-a09a0ee7e298
+FAIL
+FAIL	github.com/filspay/settlement/internal/ledger	1.967s
+ok  	github.com/filspay/settlement/internal/money	2.601s
+ok  	github.com/filspay/settlement/internal/scheduler	2.091s
+ok  	github.com/filspay/settlement/internal/settlement	2.868s
+ok  	github.com/filspay/settlement/internal/splits	1.842s
+FAIL
+go exit 1

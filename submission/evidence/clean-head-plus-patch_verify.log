@@ -1,0 +1,82 @@
+migrate: 73 migration(s) applied, 0 already up to date
+{"level":30,"time":1793366321921,"pid":54964,"hostname":"<host>","reqId":"req-1","req":{"method":"GET","url":"/v1/reporting/export-summary","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1793366321924,"pid":54964,"hostname":"<host>","reqId":"req-1","res":{"statusCode":401},"responseTime":2.5792089999999916,"msg":"request completed"}
+{"level":30,"time":1793366321924,"pid":54964,"hostname":"<host>","reqId":"req-2","req":{"method":"POST","url":"/v1/merchants","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1793366321961,"pid":54964,"hostname":"<host>","reqId":"req-2","res":{"statusCode":201},"responseTime":36.72441600000002,"msg":"request completed"}
+{"level":30,"time":1793366321963,"pid":54964,"hostname":"<host>","reqId":"req-3","req":{"method":"POST","url":"/v1/auth/login","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1793366321997,"pid":54964,"hostname":"<host>","reqId":"req-3","merchantUserId":"0be15f40-1027-467f-bd01-715425fae52d","channel":"otp","code":"799543","msg":"otp code generated (dev)"}
+{"level":30,"time":1793366321997,"pid":54964,"hostname":"<host>","reqId":"req-3","res":{"statusCode":200},"responseTime":34.59845799999994,"msg":"request completed"}
+{"level":30,"time":1793366321998,"pid":54964,"hostname":"<host>","reqId":"req-4","req":{"method":"POST","url":"/v1/auth/otp/verify","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1793366322002,"pid":54964,"hostname":"<host>","reqId":"req-4","res":{"statusCode":200},"responseTime":4.403291999999965,"msg":"request completed"}
+{"level":30,"time":1793366322002,"pid":54964,"hostname":"<host>","reqId":"req-5","req":{"method":"PATCH","url":"/v1/merchants/6520bbc3-1ab1-4b8a-b8f9-a5d162577f8b/business-profile","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+[businessProfile] updated on 2026-10-30
+{"level":30,"time":1793366322005,"pid":54964,"hostname":"<host>","reqId":"req-5","res":{"statusCode":200},"responseTime":2.3548749999999927,"msg":"request completed"}
+{"level":30,"time":1793366322005,"pid":54964,"hostname":"<host>","reqId":"req-6","req":{"method":"GET","url":"/v1/transactions/export?from=garbage","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1793366322006,"pid":54964,"hostname":"<host>","reqId":"req-6","res":{"statusCode":400},"responseTime":0.9536669999999958,"msg":"request completed"}
+{"level":30,"time":1793366322006,"pid":54964,"hostname":"<host>","reqId":"req-7","req":{"method":"GET","url":"/v1/transactions?to=nope","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1793366322007,"pid":54964,"hostname":"<host>","reqId":"req-7","res":{"statusCode":400},"responseTime":0.6781670000000304,"msg":"request completed"}
+{"level":30,"time":1793366322007,"pid":54964,"hostname":"<host>","reqId":"req-8","req":{"method":"GET","url":"/v1/reporting/export-summary","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1793366322008,"pid":54964,"hostname":"<host>","reqId":"req-8","res":{"statusCode":200},"responseTime":1.053042000000005,"msg":"request completed"}
+PASS report scope: only the caller's own split children
+PASS sqlFilter: empty id list matches nothing
+PASS web bhd: negative amounts render instead of throwing
+PASS analytics rebuild: refunds kept, nothing past the consumer watermark counted
+PASS GET /v1/reporting/export-summary unauthenticated -> 401 (was 500)
+PASS merchant OTP verify re-issues the cookie with the session TTL
+PASS business profile PATCH ignores unknown keys (was 500)
+PASS transactions list/export reject invalid from/to with 400 (was 500)
+PASS GET /v1/reporting/export-summary authenticated -> 200
+verify_fixes exit 0
+statuses 201 200 200 after two captures: { n: 1, s: 2500 }
+after replaying capture 1: { n: 1, s: 2500 }
+verify_discount exit 0
+{"level":30,"time":1793366323218,"pid":55018,"hostname":"<host>","reqId":"req-1","req":{"method":"POST","url":"/v1/acquirer/callbacks","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1793366323225,"pid":55018,"hostname":"<host>","reqId":"req-1","res":{"statusCode":200},"responseTime":6.951291999999967,"msg":"request completed"}
+PASS callback signed over its raw (pretty-printed, escaped) bytes is accepted
+PASS tampered raw body still rejected
+{"level":30,"time":1793366323226,"pid":55018,"hostname":"<host>","reqId":"req-2","req":{"method":"POST","url":"/v1/acquirer/callbacks","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":30,"time":1793366323227,"pid":55018,"hostname":"<host>","reqId":"req-2","res":{"statusCode":401},"responseTime":0.6225840000000176,"msg":"request completed"}
+{"level":30,"time":1793366323227,"pid":55018,"hostname":"<host>","reqId":"req-3","req":{"method":"POST","url":"/v1/acquirer/callbacks","host":"localhost:80","remoteAddress":"127.0.0.1"},"msg":"incoming request"}
+{"level":50,"time":1793366323227,"pid":55018,"hostname":"<host>","reqId":"req-3","err":{"type":"SyntaxError","message":"Expected property name or '}' in JSON at position 1 (line 1 column 2)","stack":"SyntaxError: Expected property name or '}' in JSON at position 1 (line 1 column 2)\n    at JSON.parse (<anonymous>)\n    at Parser.fn (<scratch-copy>/apps/api/src/routes/acquirerCallbacks.ts:51:23)\n    at Request.onEnd (<repo>/node_modules/fastify/lib/content-type-parser.js:305:27)\n    at Request.emit (node:events:508:20)\n    at endReadableNT (node:internal/streams/readable:1729:12)\n    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)","statusCode":400},"occurredOn":"2026-10-30","msg":"unhandled error"}
+{"level":30,"time":1793366323228,"pid":55018,"hostname":"<host>","reqId":"req-3","res":{"statusCode":500},"responseTime":0.9506670000000099,"msg":"request completed"}
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: {"error":"internal_error"}
+
+500 !== 400
+
+    at <anonymous> (<scratch-copy>/verify_round5.scratch.ts:25:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5) {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 500,
+  expected: 400,
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v25.6.1
+verify_round5 exit 1
+=== RUN   TestScratch_OpenBusinessDayIsRefused
+--- PASS: TestScratch_OpenBusinessDayIsRefused (0.05s)
+=== RUN   TestScratch_PayoutRecordsOneDisbursementPerBatch
+--- PASS: TestScratch_PayoutRecordsOneDisbursementPerBatch (0.05s)
+=== RUN   TestScratch_PlatformCounterClampsInsteadOfWrapping
+2026/10/30 16:18:44 settlement: platform_stats.total_processed_fils clamped at 2147483647 (INTEGER column is full)
+--- PASS: TestScratch_PlatformCounterClampsInsteadOfWrapping (0.01s)
+PASS
+ok  	github.com/filspay/settlement/internal/settlement	0.666s
+=== RUN   TestScratch_SplitPayoutCountsLifetimeEstimate
+--- PASS: TestScratch_SplitPayoutCountsLifetimeEstimate (0.03s)
+PASS
+ok  	github.com/filspay/settlement/internal/splits	0.318s
+go scratch exit 0
+
+=== re-run of verify_round5 after mapping malformed callback JSON to 400 ===
+PASS callback signed over its raw (pretty-printed, escaped) bytes is accepted
+PASS tampered raw body still rejected
+PASS malformed JSON -> 400
+PASS future credit effective date -> 400; today (UTC) accepted
+verify_round5 exit 0

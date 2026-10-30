@@ -2,6 +2,8 @@ package settlement
 
 import (
 	"context"
+	"log"
+	"math"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -23,7 +25,19 @@ func ReadAndLockPlatformProcessedFils(ctx context.Context, tx pgx.Tx) (int32, er
 // happens here rather than as SQL `SET x = x + $2` so the value written is
 // derived from exactly the value this batch's fee calculation read.
 func RecordPlatformProcessedVolume(ctx context.Context, tx pgx.Tx, current int32, batchGrossFils int64) error {
-	updated := current + int32(batchGrossFils)
+	// The column is INTEGER and widening it needs an approved migration plan,
+	// so the sum is clamped instead of wrapped. int32 addition wrapped
+	// silently past 2,147,483,647 fils: the counter went negative, fell
+	// below the volume-tier threshold (2,000,000,000), and switched the
+	// platform-wide MDR bonus back off. Lifetime volume never decreases, so a
+	// clamped counter keeps the tier decision right; the exact total needs
+	// the column widened.
+	sum := int64(current) + batchGrossFils
+	if sum > math.MaxInt32 {
+		log.Printf("settlement: platform_stats.total_processed_fils clamped at %d (INTEGER column is full)", math.MaxInt32)
+		sum = math.MaxInt32
+	}
+	updated := int32(sum)
 	_, err := tx.Exec(ctx, `
 		UPDATE platform_stats SET total_processed_fils = $1, updated_at = now() WHERE id = 1
 	`, updated)

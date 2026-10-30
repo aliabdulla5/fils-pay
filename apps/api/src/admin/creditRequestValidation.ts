@@ -81,5 +81,15 @@ export function parseCreditRequestInput(body: unknown): CreditRequestDraft {
     );
   }
 
+  // The draft's contract (above) says future dates are rejected; nothing did.
+  // postCreditToLedger dates both legs at the effective date, so a future one
+  // put the credit into a reconciliation period that hasn't happened yet.
+  // "Today" is the Asia/Bahrain business date (UTC+3, no DST), which is never
+  // behind the UTC date, so an operator's today is accepted in either zone.
+  const bahrainToday = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  if (rawDate > bahrainToday) {
+    throw new BadRequestError("invalid_effective_date", "effectiveDate must be today or earlier");
+  }
+
   return { baseAmountFils, reasonCode, memo, reverseFee, effectiveDate: rawDate };
 }

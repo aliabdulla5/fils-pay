@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FilsPay Slides</title>
+<style>
+  @page { size: 1280px 720px; margin: 0; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; color: #151515; }
+  .slide { width: 1280px; height: 720px; padding: 56px 72px; page-break-after: always; position: relative; overflow: hidden; background: #f3ece1; }
+  .slide:last-child { page-break-after: auto; }
+  .kicker { font-size: 15px; letter-spacing: 3px; text-transform: uppercase; color: #c8102e; font-weight: 700; }
+  h1 { font-size: 46px; margin: 10px 0 24px; line-height: 1.1; }
+  h2 { font-size: 30px; margin: 0 0 18px; }
+  p, li { font-size: 22px; line-height: 1.4; }
+  ul { margin: 0; padding-left: 26px; }
+  li { margin: 6px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 19px; }
+  th, td { border-bottom: 1px solid #c9bfae; padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { color: #6b5f4b; font-weight: 600; }
+  code { font: 18px Menlo, monospace; background: #fff8; padding: 0 4px; }
+  .todo { background: #fff3b0; padding: 0 6px; font-weight: 600; }
+  .big { font-size: 34px; line-height: 1.3; font-weight: 600; }
+  .footer { position: absolute; bottom: 24px; left: 72px; right: 72px; font-size: 13px; color: #7a6f5c; display: flex; justify-content: space-between; }
+  .cols { display: flex; gap: 40px; }
+  .cols > div { flex: 1; }
+  .box { background: #fffaf2; border-left: 6px solid #c8102e; padding: 14px 18px; margin: 10px 0; font-size: 20px; }
+  .mono { font: 17px/1.35 Menlo, monospace; white-space: pre; background: #fffaf2; padding: 14px; border: 1px solid #ddd2bf; }
+</style>
+</head>
+<body>
+
+<section class="slide">
+  <div class="kicker">The Handover · FilsPay</div>
+  <h1><span class="todo">[Team name]</span></h1>
+  <table>
+    <tr><th>Member</th><th>Owned</th></tr>
+    <tr><td><span class="todo">[Name]</span></td><td><span class="todo">[Settlement &amp; money fixes]</span></td></tr>
+    <tr><td><span class="todo">[Name]</span></td><td><span class="todo">[Security &amp; API]</span></td></tr>
+    <tr><td><span class="todo">[Name]</span></td><td><span class="todo">[Deployment &amp; load test]</span></td></tr>
+  </table>
+  <p style="margin-top:28px">92 findings · 79 fixed · 10 left open, each with a stated reason · 0 tests edited</p>
+  <div class="footer"><span>1 · Team</span><span>FilsPay</span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker">Root cause</div>
+  <p class="big">The same money fact is computed in two places that drifted apart, and nothing checks that they agree. Locked tests that assert the buggy behaviour make the drift look correct.</p>
+  <ul style="margin-top:26px">
+    <li>Balance button vs CLI ledger walk → 135K became 7K (FP-203)</li>
+    <li>Capture fee vs settlement fee → off by a fil; discount credited twice on replay</li>
+    <li>Analytics rebuild vs reporting worker → refunds vanish</li>
+    <li>Webhook delivery writing payout records → duplicates, or none at all</li>
+    <li>Agent files ("amounts are cents", "windows are UTC") vs ADR-0001/0007</li>
+  </ul>
+  <div class="footer"><span>2 · Root cause</span><span>FilsPay</span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker">Key findings, ranked by impact</div>
+  <table>
+    <tr><th>#</th><th>Finding</th><th>Evidence</th></tr>
+    <tr><td>1</td><td>Hold expiry wiped <b>every</b> hold on quiet nights</td><td>Empty id list → <code>DELETE FROM holds</code></td></tr>
+    <tr><td>2</td><td>Admin run-batch on today stranded later captures, never paid out</td><td>Closed batch = no-op on re-run; next window doesn't reach back</td></tr>
+    <tr><td>3</td><td>Capture replay double-credits the negotiated discount</td><td>Repro: 2.500 BD credited twice</td></tr>
+    <tr><td>4</td><td>Any merchant could read a marketplace sub-merchant's transactions</td><td>Report filter <code>merchantId</code> = any split child</td></tr>
+  </table>
+  <p style="margin-top:20px">Plus the case file: refunds end to end, double-paid links, duplicate payouts, 10× CSV import, scheme residue, split fils, the 03:15 close.</p>
+  <div class="footer"><span>3 · Key findings</span><span>FilsPay</span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker">Fixes and proof</div>
+  <div class="cols">
+    <div>
+      <div class="box"><b>Holds:</b> empty list → <code>WHERE FALSE</code>, one locked transaction. Live hold + 0 expired → 0 deleted.</div>
+      <div class="box"><b>Business day:</b> <code>ErrBusinessDayNotComplete</code>, 400 from the internal API. Today and tomorrow refused, no batch row created.</div>
+      <div class="box"><b>Discount:</b> adjustments matched to the captures owed one. Replay → <code>{ n: 1, s: 2500 }</code>.</div>
+    </div>
+    <div>
+      <div class="box"><b>IDOR:</b> child must belong to the caller. Unrelated merchant → its own data only.</div>
+      <div class="box"><b>Disbursements:</b> written once, inside PayoutBatch. Two payouts → exactly 1 row.</div>
+      <div class="box"><b>Method:</b> untouched <code>HEAD</code> + our patch only, fresh Postgres per run; full suites show no new failures.</div>
+    </div>
+  </div>
+  <div class="footer"><span>4 · Fixes and proof</span><span>FilsPay</span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker">Live demo</div>
+  <h2>Full and partial refund, end to end</h2>
+  <ol style="font-size:22px">
+    <li>Pay a payment link at checkout</li>
+    <li>Partial refund from the dashboard: transaction becomes <i>partially refunded</i>, the timeline shows a negative row, fee reversed pro rata</li>
+    <li>Full refund of the remainder: reversed fee sums to exactly the fee charged</li>
+    <li>Run settlement for the completed day: the batch nets the refunds; show the reconciliation page and its gap</li>
+  </ol>
+  <p><span class="todo">[Backup screenshots: detail page, settlement batch, reconciliation]</span></p>
+  <div class="footer"><span>5 · Live demo</span><span>FilsPay</span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker">Under load</div>
+  <div class="cols">
+    <div class="mono">Internet → proxy (TLS)
+  ├ web / admin (static)
+  └ api :3000 ─┐
+               ▼
+     postgres (127.0.0.1)
+       ▲            ▲
+ settlement :8091   reporting
+ (internal only)    (no port)</div>
+    <div>
+      <p><b>Estimate (from code):</b> ~5 checkouts in flight (pool of 5); about 6–15 checkouts/s</p>
+      <p><b>Measured:</b> <span class="todo">[users, p95, error rate]</span></p>
+      <p><b>Bottleneck:</b> DB pool + row lock held across the acquirer call</p>
+      <p><b>Overload:</b> <span class="todo">[429 / rate limit / restart policy you configured]</span></p>
+    </div>
+  </div>
+  <div class="footer"><span>6 · Under load</span><span>FilsPay</span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker">How we used AI</div>
+  <p><b>Setup:</b> Claude Code with the repo and a disposable Postgres container. Every claim had to come with a reproduction on a fresh database. <span class="todo">[your setup files]</span></p>
+  <div class="box"><b>When the AI was wrong:</b> it reported a "patched" verification copy that held only 2 of 16 fixes, because zsh doesn't split <code>$MINE</code> into separate paths. A byte-for-byte comparison against the working tree caught it; everything was rebuilt and re-run.</div>
+  <div class="box"><b>Also caught:</b> an earlier AI claim that "Go tests pass". The database-backed tests skip without <code>DATABASE_URL</code>; with a real database, 2 fail. And the repo's own agent files say amounts are cents, which ADR-0001 contradicts.</div>
+  <div class="footer"><span>7 · AI</span><span>FilsPay</span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker">Decisions and open risks</div>
+  <table>
+    <tr><th>Not changed</th><th>Why</th></tr>
+    <tr><td><code>Math.random()</code> OTPs, display-name approver check</td><td>Explicit repository instruction (one-line fixes once allowed)</td></tr>
+    <tr><td>INTEGER platform counter, REAL lifetime estimate</td><td>Needs a DBA-approved migration; the counter now clamps instead of wrapping</td></tr>
+    <tr><td>Locked tests asserting old bugs (7 API, 2 Go, 1 script)</td><td>Tests must not be edited; replace them with ADR-based tests</td></tr>
+    <tr><td>Historical data (duplicate disbursements, stranded captures, double credits)</td><td>Fixes are forward-only; detection queries first, then finance sign-off</td></tr>
+    <tr><td>Commit-order outbox; webhook SSRF; poison event</td><td>Open design work</td></tr>
+  </table>
+  <div class="footer"><span>8 · Decisions</span><span>FilsPay</span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker">Appendix (not presented)</div>
+  <table>
+    <tr><th>Check (clean HEAD + patch, fresh DB)</th><th>Result</th></tr>
+    <tr><td>typecheck · go vet · diff --check</td><td>clean</td></tr>
+    <tr><td>money · events · web</td><td>40/40 · 4/4 · 8/8</td></tr>
+    <tr><td>API</td><td>355/362 — 7 locked tests assert the old bugs</td></tr>
+    <tr><td>Reporting</td><td>11/11 alone (7/11 combined: shared-DB contamination)</td></tr>
+    <tr><td>Scripts · Go</td><td>4/5 (UTC-month test) · ledger 2 stale (pre-ADR-0008)</td></tr>
+  </table>
+  <p>Full findings: <code>docs/BUG_INVENTORY.md</code> and the submission document, section 4. Logs: <code>submission/evidence/</code>.</p>
+  <div class="footer"><span>Appendix</span><span>FilsPay</span></div>
+</section>
+
+</body>
+</html>

@@ -57,6 +57,17 @@ function getIdempotencyKey(request: FastifyRequest): string {
   return key;
 }
 
+/** An optional ISO-8601 query instant, or 400. `new Date("garbage")` went
+ *  through to Postgres as "NaN-NaN-..." and came back as a 500. */
+function parseOptionalInstant(value: string | undefined, name: string): Date | undefined {
+  if (!value) return undefined;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new BadRequestError("invalid_request", `${name} must be a valid ISO-8601 timestamp`);
+  }
+  return parsed;
+}
+
 /**
  * Registered with prefix '/v1/transactions'. Endpoint auth: authorize is
  * API-key-only (a server-to-server "charge a
@@ -141,8 +152,8 @@ export async function transactionRoutes(app: FastifyInstance): Promise<void> {
       return listTransactions(app.db, {
         merchantId: request.merchantAuth!.merchantId,
         status,
-        from: q.from ? new Date(q.from) : undefined,
-        to: q.to ? new Date(q.to) : undefined,
+        from: parseOptionalInstant(q.from, "from"),
+        to: parseOptionalInstant(q.to, "to"),
         search: q.search,
         limit,
         cursor: q.cursor ?? null,
@@ -159,8 +170,8 @@ export async function transactionRoutes(app: FastifyInstance): Promise<void> {
 
       const csv = await buildTransactionsExportCsv(app.db, {
         merchantId: request.merchantAuth!.merchantId,
-        from: q.from ? new Date(q.from) : undefined,
-        to: q.to ? new Date(q.to) : undefined,
+        from: parseOptionalInstant(q.from, "from"),
+        to: parseOptionalInstant(q.to, "to"),
         status,
       });
 

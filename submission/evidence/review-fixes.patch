@@ -1,0 +1,759 @@
+diff --git a/apps/admin/src/pages/settlement/SettlementPage.tsx b/apps/admin/src/pages/settlement/SettlementPage.tsx
+index ff35ec4..10acbed 100644
+--- a/apps/admin/src/pages/settlement/SettlementPage.tsx
++++ b/apps/admin/src/pages/settlement/SettlementPage.tsx
+@@ -15,11 +15,11 @@ function bhd(fils: number): string {
+   return `${formatBhd(toFils(fils, { allowNegative: true }))} BHD`;
+ }
+ 
+-// YA: browser-local yesterday
++// The last completed Asia/Bahrain business day (UTC+3, no DST), whatever
++// the browser's zone. Local "yesterday" printed with toISOString() was a UTC
++// date: from 00:00 to 03:00 Bahrain time it defaulted to two days ago.
+ function yesterdayIso(): string {
+-  const date = new Date();
+-  date.setDate(date.getDate() - 1);
+-  return date.toISOString().slice(0, 10);
++  return new Date(Date.now() + 3 * 3_600_000 - 86_400_000).toISOString().slice(0, 10);
+ }
+ 
+ /**
+diff --git a/apps/api/src/admin/creditRequestValidation.ts b/apps/api/src/admin/creditRequestValidation.ts
+index a87608a..eb2b9aa 100644
+--- a/apps/api/src/admin/creditRequestValidation.ts
++++ b/apps/api/src/admin/creditRequestValidation.ts
+@@ -81,5 +81,15 @@ export function parseCreditRequestInput(body: unknown): CreditRequestDraft {
+     );
+   }
+ 
++  // The draft's contract (above) says future dates are rejected; nothing did.
++  // postCreditToLedger dates both legs at the effective date, so a future one
++  // put the credit into a reconciliation period that hasn't happened yet.
++  // "Today" is the Asia/Bahrain business date (UTC+3, no DST), which is never
++  // behind the UTC date, so an operator's today is accepted in either zone.
++  const bahrainToday = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
++  if (rawDate > bahrainToday) {
++    throw new BadRequestError("invalid_effective_date", "effectiveDate must be today or earlier");
++  }
++
+   return { baseAmountFils, reasonCode, memo, reverseFee, effectiveDate: rawDate };
+ }
+diff --git a/apps/api/src/admin/reportingRebuild.ts b/apps/api/src/admin/reportingRebuild.ts
+index 4f15b2a..27be56f 100644
+--- a/apps/api/src/admin/reportingRebuild.ts
++++ b/apps/api/src/admin/reportingRebuild.ts
+@@ -6,33 +6,67 @@ export interface RebuildAnalyticsSummary {
+   trendRows: number;
+ }
+ 
++/** apps/reporting's consumer name (runConsumerPass.ts CONSUMER_NAME). */
++const REPORTING_CONSUMER_NAME = "reporting";
++
+ /** Truncates and repopulates the two rollup tables
+- *  (merchant_daily_volume, merchant_payout_trends) from source. */
++ *  (merchant_daily_volume, merchant_payout_trends) from source.
++ *
++ *  Source is the outbox, up to the reporting consumer's own watermark, with
++ *  the same buckets and fields apps/reporting's applyEvent writes, so the
++ *  worker carries on from exactly where this leaves off. Rebuilding from
++ *  transaction_events instead dropped every refund (refund_count and
++ *  refund_gross_fils came back zero), and it double-counted any capture the
++ *  worker had not consumed yet: the rebuild counted it, then the worker
++ *  applied its outbox event on top. */
+ export async function refreshAnalyticsRollups(client: PoolClient): Promise<RebuildAnalyticsSummary> {
+   // YA: ACCESS EXCLUSIVE lock is fine while analytics is internal only (Jan 2026)
++  // The lock also waits out an in-flight consumer pass and holds back the
++  // next one's writes, so the watermark read below cannot move under us.
+   await client.query(`TRUNCATE merchant_daily_volume`);
+   await client.query(`TRUNCATE merchant_payout_trends`);
+ 
++  const cursor = await client.query<{ last_processed_id: string }>(
++    `SELECT last_processed_id FROM reporting_outbox_cursor WHERE consumer_name = $1`,
++    [REPORTING_CONSUMER_NAME],
++  );
++  const watermark = cursor.rows[0]?.last_processed_id ?? "0";
++
++  // One row per batch, the latest batch_closed event winning, as the
++  // consumer's ON CONFLICT DO UPDATE in id order leaves it.
+   const trendResult = await client.query(
+     `INSERT INTO merchant_payout_trends
+         (merchant_id, settlement_batch_id, batch_date, status, gross_fils, fee_fils, net_payout_fils, paid_at, last_updated_at)
+-     SELECT merchant_id, id, batch_date, status, gross_fils, fee_fils, net_payout_fils, paid_at, now()
+-       FROM settlement_batches`,
++     SELECT DISTINCT ON (sb.merchant_id, sb.id)
++            (oe.payload->>'merchantId')::uuid, sb.id, (oe.payload->>'batchDate')::date, sb.status,
++            (oe.payload->>'grossFils')::bigint, (oe.payload->>'feeFils')::bigint,
++            (oe.payload->>'netPayoutFils')::bigint, sb.paid_at, now()
++       FROM outbox_events oe
++       JOIN settlement_batches sb ON sb.id = (oe.payload->>'batchId')::uuid
++      WHERE oe.id <= $1
++        AND oe.event_type = 'settlement.batch_closed'
++      ORDER BY sb.merchant_id, sb.id, oe.id DESC`,
++    [watermark],
+   );
+ 
+   const volumeResult = await client.query(
+     `INSERT INTO merchant_daily_volume
+-        (merchant_id, volume_date, captured_count, captured_gross_fils, voided_count, last_updated_at)
+-     SELECT t.merchant_id,
+-            (te.occurred_at AT TIME ZONE 'Asia/Bahrain')::date,
+-            COUNT(*) FILTER (WHERE te.event_type IN ('captured', 'partially_captured')),
+-            COALESCE(SUM(te.amount_fils) FILTER (WHERE te.event_type IN ('captured', 'partially_captured')), 0),
+-            COUNT(*) FILTER (WHERE te.event_type = 'voided'),
++        (merchant_id, volume_date, captured_count, captured_gross_fils, voided_count,
++         refund_count, refund_gross_fils, last_updated_at)
++     SELECT (oe.payload->>'merchantId')::uuid,
++            (oe.created_at AT TIME ZONE 'Asia/Bahrain')::date,
++            COUNT(*) FILTER (WHERE oe.event_type = 'transaction.captured'),
++            COALESCE(SUM((oe.payload->>'amountCapturedFils')::bigint) FILTER (WHERE oe.event_type = 'transaction.captured'), 0),
++            COUNT(*) FILTER (WHERE oe.event_type = 'transaction.voided'),
++            COUNT(*) FILTER (WHERE oe.event_type = 'refund.succeeded'),
++            COALESCE(SUM((oe.payload->>'amountFils')::bigint) FILTER (WHERE oe.event_type = 'refund.succeeded'), 0),
+             now()
+-       FROM transaction_events te
+-       JOIN transactions t ON t.id = te.transaction_id
+-      WHERE te.event_type IN ('captured', 'partially_captured', 'voided')
+-      GROUP BY t.merchant_id, (te.occurred_at AT TIME ZONE 'Asia/Bahrain')::date`,
++       FROM outbox_events oe
++      WHERE oe.id <= $1
++        AND oe.event_type IN ('transaction.captured', 'transaction.voided', 'refund.succeeded')
++        AND oe.payload->>'merchantId' IS NOT NULL
++      GROUP BY 1, 2`,
++    [watermark],
+   );
+ 
+   return { volumeRows: volumeResult.rowCount ?? 0, trendRows: trendResult.rowCount ?? 0 };
+diff --git a/apps/api/src/onboarding/businessProfile.ts b/apps/api/src/onboarding/businessProfile.ts
+index cb53a8c..bea67fc 100644
+--- a/apps/api/src/onboarding/businessProfile.ts
++++ b/apps/api/src/onboarding/businessProfile.ts
+@@ -101,7 +101,12 @@ export async function updateBusinessProfile(
+   merchantId: string,
+   patch: BusinessProfilePatch,
+ ): Promise<BusinessProfile> {
+-  const entries = Object.entries(patch).filter(([, value]) => value !== undefined) as Array<
++  // Only keys PATCHABLE_COLUMNS defines. The body is untyped JSON: any other
++  // key looked up `undefined` (or an Object.prototype member) as its column
++  // and the UPDATE failed with a 500 instead of ignoring the field.
++  const entries = Object.entries(patch).filter(
++    ([key, value]) => value !== undefined && Object.hasOwn(PATCHABLE_COLUMNS, key),
++  ) as Array<
+     [keyof BusinessProfilePatch, string | null]
+   >;
+ 
+diff --git a/apps/api/src/payments/discountAdjustment.ts b/apps/api/src/payments/discountAdjustment.ts
+index 16658fc..4bad769 100644
+--- a/apps/api/src/payments/discountAdjustment.ts
++++ b/apps/api/src/payments/discountAdjustment.ts
+@@ -57,27 +57,12 @@ export async function applyCaptureDiscountAdjustment(
+     // credit the merchant twice for one capture. The row lock serializes
+     // this count against a concurrent capture's own adjustment.
+     await client.query(`SELECT id FROM transactions WHERE id = $1 FOR UPDATE`, [input.transactionId]);
+-    const countRow = await client.query<{ capture_events: string; adjustments: string }>(
+-      `SELECT (SELECT count(*) FROM transaction_events
+-                WHERE transaction_id = $1 AND event_type IN ('captured', 'partially_captured')) AS capture_events,
+-              (SELECT count(*) FROM ledger_entries
+-                WHERE transaction_id = $1 AND direction = 'credit'
+-                  AND description = 'capture: negotiated discount adjustment') AS adjustments`,
+-      [input.transactionId],
+-    );
+-    const counts = countRow.rows[0];
+-    if (counts && Number(counts.adjustments) >= Number(counts.capture_events)) return;
+-
+-    const eventRow = await client.query<{ amount_fils: string; metadata: { feeFils?: number; mdrBps?: number } }>(
+-      `SELECT amount_fils, metadata FROM transaction_events
+-        WHERE transaction_id = $1 AND event_type IN ('captured', 'partially_captured')
+-        ORDER BY occurred_at DESC, id DESC LIMIT 1`,
+-      [input.transactionId],
+-    );
+-    const event = eventRow.rows[0];
+-    const feeBeforeDiscount = toFils(event?.metadata?.feeFils ?? 0);
+-    if (!event || feeBeforeDiscount <= 0) return;
+-
++    // Match adjustments to the capture events that are owed one, oldest
++    // first. Comparing "adjustments < capture events" and then adjusting the
++    // latest event broke as soon as one capture was owed nothing (a small
++    // capture whose discount rounds to 0): the counts never caught up, so a
++    // replay of that capture credited the latest capture's discount again.
++    //
+     // ARCHITECTURE.md: "Discounts reduce the amount the MDR is charged on" —
+     // the order settlement's ComputeSettlementFee (discounted_fee.go) uses.
+     // Discounting the already-rounded fee instead rounds differently (602
+@@ -85,11 +70,30 @@ export async function applyCaptureDiscountAdjustment(
+     // the ledger and the settlement batch disagreed by a fils on such
+     // captures and reconciliation never tied. The adjustment is whatever
+     // brings the charged fee down to the settlement figure.
+-    const amountFils = toFils(Number(event.amount_fils));
+-    const mdrBps = event.metadata?.mdrBps ?? merchantRow.rows[0]?.mdr_bps ?? 0;
+-    const settlementFee = applyRateFils(subtractFils(amountFils, applyRateFils(amountFils, discountBps)), mdrBps);
+-    if (compareFils(settlementFee, feeBeforeDiscount) >= 0) return;
+-    const discountFils = subtractFils(feeBeforeDiscount, settlementFee);
++    const events = await client.query<{ amount_fils: string; metadata: { feeFils?: number; mdrBps?: number } }>(
++      `SELECT amount_fils, metadata FROM transaction_events
++        WHERE transaction_id = $1 AND event_type IN ('captured', 'partially_captured')
++        ORDER BY occurred_at ASC, id ASC`,
++      [input.transactionId],
++    );
++    const owed = events.rows
++      .map((event) => {
++        const feeBeforeDiscount = toFils(event.metadata?.feeFils ?? 0);
++        const amountFils = toFils(Number(event.amount_fils));
++        const mdrBps = event.metadata?.mdrBps ?? merchantRow.rows[0]?.mdr_bps ?? 0;
++        const settlementFee = applyRateFils(subtractFils(amountFils, applyRateFils(amountFils, discountBps)), mdrBps);
++        return compareFils(settlementFee, feeBeforeDiscount) >= 0 ? 0 : subtractFils(feeBeforeDiscount, settlementFee);
++      })
++      .filter((discount) => discount > 0);
++    const adjusted = await client.query<{ adjustments: string }>(
++      `SELECT count(*) AS adjustments FROM ledger_entries
++        WHERE transaction_id = $1 AND direction = 'credit'
++          AND description = 'capture: negotiated discount adjustment'`,
++      [input.transactionId],
++    );
++    const alreadyAdjusted = Number(adjusted.rows[0]?.adjustments ?? 0);
++    if (alreadyAdjusted >= owed.length) return;
++    const discountFils = owed[alreadyAdjusted]!;
+ 
+     const entryGroupId = randomUUID();
+     await client.query(
+diff --git a/apps/api/src/reporting/scope.ts b/apps/api/src/reporting/scope.ts
+index babd4fc..233a3de 100644
+--- a/apps/api/src/reporting/scope.ts
++++ b/apps/api/src/reporting/scope.ts
+@@ -9,9 +9,12 @@ export async function resolveReportMerchantId(
+     return callerMerchantId;
+   }
+ 
++  // Only the caller's own split children. Matching on child_merchant_id
++  // alone let any merchant read the transactions of every sub-merchant of
++  // every marketplace by putting that child's id in the report filter.
+   const result = await pool.query<{ ok: number }>(
+-    `SELECT 1 AS ok FROM merchant_split_children WHERE child_merchant_id = $1`,
+-    [requestedMerchantId],
++    `SELECT 1 AS ok FROM merchant_split_children WHERE parent_merchant_id = $1 AND child_merchant_id = $2`,
++    [callerMerchantId, requestedMerchantId],
+   );
+   if (result.rows.length === 0) {
+     return callerMerchantId;
+diff --git a/apps/api/src/routes/acquirerCallbacks.ts b/apps/api/src/routes/acquirerCallbacks.ts
+index 179c158..069add4 100644
+--- a/apps/api/src/routes/acquirerCallbacks.ts
++++ b/apps/api/src/routes/acquirerCallbacks.ts
+@@ -20,6 +20,9 @@ interface AcquirerCallbackBody {
+   note?: string;
+ }
+ 
++/** Raw JSON body per request, captured by this plugin's content-type parser. */
++const rawBodies = new WeakMap<FastifyRequest, string>();
++
+ /** Header format: "t=<unix seconds>,v1=<hex hmac>". A repeated header uses the first value. */
+ function getSignatureHeader(request: FastifyRequest): string | undefined {
+   const header = request.headers[ACQUIRER_SIGNATURE_HEADER];
+@@ -38,6 +41,19 @@ function getSignatureHeader(request: FastifyRequest): string | undefined {
+  * endpoint has.
+  */
+ export async function acquirerCallbackRoutes(app: FastifyInstance): Promise<void> {
++  // Keep the exact bytes received so the signature is checked over what the
++  // acquirer signed, not over a re-serialization of the parsed body. Scoped
++  // to this plugin; every other route keeps the default JSON parser.
++  app.removeContentTypeParser("application/json");
++  app.addContentTypeParser("application/json", { parseAs: "string" }, (request, body, done) => {
++    rawBodies.set(request, body as string);
++    try {
++      done(null, JSON.parse(body as string));
++    } catch {
++      done(new BadRequestError("invalid_request", "body must be valid JSON"), undefined);
++    }
++  });
++
+   app.post<{ Body: AcquirerCallbackBody }>("/callbacks", async (request, reply) => {
+     const body = request.body ?? {};
+     if (
+@@ -55,7 +71,7 @@ export async function acquirerCallbackRoutes(app: FastifyInstance): Promise<void
+     }
+ 
+     const verification = verifyAcquirerCallbackSignature(
+-      body,
++      rawBodies.get(request) ?? body,
+       getSignatureHeader(request),
+       app.config.acquirerCallbackSigningSecret,
+       app.config.acquirerCallbackRequireSignature,
+diff --git a/apps/api/src/routes/auth.ts b/apps/api/src/routes/auth.ts
+index 723421b..41a6529 100644
+--- a/apps/api/src/routes/auth.ts
++++ b/apps/api/src/routes/auth.ts
+@@ -191,6 +191,17 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
+         throw new Error("otp/verify: merchant_users row disappeared mid-transaction");
+       }
+ 
++      // The cookie still carried the pending session's 10-minute maxAge, so
++      // the browser dropped it 10 minutes after login although the session
++      // itself was promoted to sessionTtlHours. Same re-issue admin verify does.
++      reply.setCookie(app.config.cookieName, rawToken, {
++        httpOnly: true,
++        path: "/",
++        sameSite: "lax",
++        secure: app.config.cookieSecure,
++        maxAge: app.config.sessionTtlHours * 3_600,
++      });
++
+       reply.code(200).send({
+         authenticated: true,
+         merchantId: merchantUserResult.merchant_id,
+diff --git a/apps/api/src/routes/businessProfile.ts b/apps/api/src/routes/businessProfile.ts
+index ba4f44b..7fd8ab5 100644
+--- a/apps/api/src/routes/businessProfile.ts
++++ b/apps/api/src/routes/businessProfile.ts
+@@ -8,6 +8,16 @@ interface MerchantIdParams {
+   merchantId: string;
+ }
+ 
++/** merchant_business_profiles.business_type CHECK (migration 0014). Anything
++ *  else reached the INSERT/UPDATE and came back as a 500. */
++const BUSINESS_TYPES: readonly string[] = ["sole_proprietorship", "llc", "partnership", "public_company", "other"];
++
++function assertBusinessType(value: unknown): void {
++  if (value !== undefined && (typeof value !== "string" || !BUSINESS_TYPES.includes(value))) {
++    throw new BadRequestError("invalid_request", `businessType must be one of ${BUSINESS_TYPES.join(", ")}`);
++  }
++}
++
+ /**
+  * Registered with prefix '/v1/merchants'. Colocates two things that share
+  * that prefix: merchant signup (POST /v1/merchants, the collection-level
+@@ -37,6 +47,7 @@ export async function businessProfileRoutes(app: FastifyInstance): Promise<void>
+     ) {
+       throw new BadRequestError("invalid_request", "missing required business profile or owner fields");
+     }
++    assertBusinessType(bp.businessType);
+ 
+     const result = await createMerchantWithOwner(app.db, app.config, body as SignupInput);
+     reply.code(201).send({
+@@ -61,6 +72,7 @@ export async function businessProfileRoutes(app: FastifyInstance): Promise<void>
+     { preHandler: [requireSession, requireRole("owner", "finance")] },
+     async (request) => {
+       assertOwnMerchant(request);
++      assertBusinessType(request.body?.businessType);
+       const profile = await updateBusinessProfile(app.db, request.params.merchantId, request.body ?? {});
+       return profile;
+     },
+diff --git a/apps/api/src/routes/kyc.ts b/apps/api/src/routes/kyc.ts
+index d8b649a..6a1dbbf 100644
+--- a/apps/api/src/routes/kyc.ts
++++ b/apps/api/src/routes/kyc.ts
+@@ -25,6 +25,15 @@ interface KycDocumentParams extends MerchantIdParams {
+   documentId: string;
+ }
+ 
++/** Content-Disposition for a stored, user-supplied filename. Node refuses
++ *  header values outside latin-1 (ERR_INVALID_CHAR), so an Arabic filename
++ *  made the download a 500; a quote or backslash broke the quoted string.
++ *  ASCII fallback plus the RFC 6266 filename* form. */
++function inlineDisposition(fileName: string): string {
++  const fallback = fileName.replace(/[^\x20-\x7e]|["\\]/g, "_");
++  return `inline; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
++}
++
+ function assertOwnMerchant(request: FastifyRequest<{ Params: MerchantIdParams }>): void {
+   if (!request.auth || request.auth.merchantId !== request.params.merchantId) {
+     throw new ForbiddenError("forbidden");
+@@ -105,7 +114,7 @@ export async function kycRoutes(app: FastifyInstance): Promise<void> {
+         request.params.documentId,
+       );
+       reply.header("Content-Type", file.mimeType);
+-      reply.header("Content-Disposition", `inline; filename="${file.fileName}"`);
++      reply.header("Content-Disposition", inlineDisposition(file.fileName));
+       return reply.send(file.buffer);
+     },
+   );
+@@ -122,7 +131,7 @@ export async function kycRoutes(app: FastifyInstance): Promise<void> {
+         request.params.documentId,
+       );
+       reply.header("Content-Type", file.mimeType);
+-      reply.header("Content-Disposition", `inline; filename="${file.fileName}"`);
++      reply.header("Content-Disposition", inlineDisposition(file.fileName));
+       return reply.send(file.buffer);
+     },
+   );
+diff --git a/apps/api/src/routes/reporting.ts b/apps/api/src/routes/reporting.ts
+index 6613968..6257209 100644
+--- a/apps/api/src/routes/reporting.ts
++++ b/apps/api/src/routes/reporting.ts
+@@ -76,7 +76,9 @@ export async function reportingRoutes(app: FastifyInstance): Promise<void> {
+     async (request) => listSavedFilters(app.db, { merchantId: request.merchantAuth!.merchantId }),
+   );
+ 
+-  app.get("/export-summary", async (request) => {
++  // Registered without a preHandler, so request.merchantAuth was never set
++  // and every call died on the non-null assertion below with a 500.
++  app.get("/export-summary", { preHandler: requireMerchantAuth }, async (request) => {
+     const result = await app.db.query(
+       `SELECT COUNT(*) AS total, SUM(captured_gross_fils) AS gross
+          FROM merchant_daily_volume WHERE merchant_id = $1`,
+diff --git a/apps/api/src/routes/transactions.ts b/apps/api/src/routes/transactions.ts
+index d0c6788..11f5e1e 100644
+--- a/apps/api/src/routes/transactions.ts
++++ b/apps/api/src/routes/transactions.ts
+@@ -57,6 +57,17 @@ function getIdempotencyKey(request: FastifyRequest): string {
+   return key;
+ }
+ 
++/** An optional ISO-8601 query instant, or 400. `new Date("garbage")` went
++ *  through to Postgres as "NaN-NaN-..." and came back as a 500. */
++function parseOptionalInstant(value: string | undefined, name: string): Date | undefined {
++  if (!value) return undefined;
++  const parsed = new Date(value);
++  if (Number.isNaN(parsed.getTime())) {
++    throw new BadRequestError("invalid_request", `${name} must be a valid ISO-8601 timestamp`);
++  }
++  return parsed;
++}
++
+ /**
+  * Registered with prefix '/v1/transactions'. Endpoint auth: authorize is
+  * API-key-only (a server-to-server "charge a
+@@ -141,8 +152,8 @@ export async function transactionRoutes(app: FastifyInstance): Promise<void> {
+       return listTransactions(app.db, {
+         merchantId: request.merchantAuth!.merchantId,
+         status,
+-        from: q.from ? new Date(q.from) : undefined,
+-        to: q.to ? new Date(q.to) : undefined,
++        from: parseOptionalInstant(q.from, "from"),
++        to: parseOptionalInstant(q.to, "to"),
+         search: q.search,
+         limit,
+         cursor: q.cursor ?? null,
+@@ -159,8 +170,8 @@ export async function transactionRoutes(app: FastifyInstance): Promise<void> {
+ 
+       const csv = await buildTransactionsExportCsv(app.db, {
+         merchantId: request.merchantAuth!.merchantId,
+-        from: q.from ? new Date(q.from) : undefined,
+-        to: q.to ? new Date(q.to) : undefined,
++        from: parseOptionalInstant(q.from, "from"),
++        to: parseOptionalInstant(q.to, "to"),
+         status,
+       });
+ 
+diff --git a/apps/api/src/webhooks/dispatcher.ts b/apps/api/src/webhooks/dispatcher.ts
+index 4953da4..621ee70 100644
+--- a/apps/api/src/webhooks/dispatcher.ts
++++ b/apps/api/src/webhooks/dispatcher.ts
+@@ -6,7 +6,6 @@ import { canonicalJson } from "../payments/idempotency.js";
+ import { decodeEncryptionKey, decryptSecret } from "./secretCrypto.js";
+ import { signPayload } from "./sign.js";
+ import { buildEnvelope } from "./envelope.js";
+-import { recordPayoutDisbursementEffect } from "./payoutDisbursement.js";
+ import { WEBHOOK_DELIVERY_ID_HEADER, WEBHOOK_SIGNATURE_HEADER } from "./headers.js";
+ import type { WebhookTransport } from "./transport.js";
+ 
+@@ -33,14 +32,13 @@ const WEBHOOK_ELIGIBLE_EVENT_TYPES: readonly string[] = [
+ ];
+ const NOTIFY_CHANNEL = "outbox_events_channel";
+ 
+-type PreDeliveryEffect = (pool: Pool, payload: Record<string, unknown>) => Promise<void>;
+-
+-const PRE_DELIVERY_EFFECTS: Record<string, PreDeliveryEffect> = {
+-  "settlement.paid": async (pool, payload) => {
+-    const data = payload.data as { settlementBatchId: string; netPayoutFils: number };
+-    await recordPayoutDisbursementEffect(pool, data.settlementBatchId, Number(data.netPayoutFils));
+-  },
+-};
++// The payout disbursement record (settlement_payout_disbursements) used to be
++// written here, as a "pre-delivery effect" of the first settlement.paid
++// delivery attempt. That made a money record depend on webhook plumbing: one
++// row per active endpoint, another per replay or archive restore (each a new
++// delivery at attempt 0), and none at all for a merchant with no endpoint.
++// PayoutBatch / PayoutSplitBatch now write it in the payout's own transaction
++// (migration 0057: "one row per paid batch").
+ 
+ export type DispatcherConfig = Pick<
+   Config,
+@@ -158,11 +156,6 @@ async function attemptOneDelivery(
+   const secret = decryptSecret(row.secret_ciphertext, key);
+   const { signature } = signPayload(row.payload, secret);
+ 
+-  if (row.attempt_count === 0) {
+-    const effect = PRE_DELIVERY_EFFECTS[row.event_type];
+-    if (effect) await effect(pool, row.payload);
+-  }
+-
+   const result = await transport({
+     url: row.url,
+     headers: {
+diff --git a/apps/api/src/webhooks/inboundVerify.ts b/apps/api/src/webhooks/inboundVerify.ts
+index fa93794..0875aae 100644
+--- a/apps/api/src/webhooks/inboundVerify.ts
++++ b/apps/api/src/webhooks/inboundVerify.ts
+@@ -64,8 +64,13 @@ export function verifyAcquirerCallbackSignature(
+   const parsed = parseAcquirerSignatureHeader(header);
+   if (!parsed) return { valid: false, reason: "malformed_header" };
+ 
++  // A string payload is the raw request body, signed exactly as received.
++  // Re-serializing the parsed body (JSON.stringify) only matches a sender
++  // whose JSON has no whitespace, no escaped unicode and no number spellings
++  // like 1.0, so a correctly signed callback could fail verification.
++  const signedBody = typeof payload === "string" ? payload : JSON.stringify(payload);
+   const expected = createHmac("sha256", secret)
+-    .update(`${parsed.timestamp}.${JSON.stringify(payload)}`)
++    .update(`${parsed.timestamp}.${signedBody}`)
+     .digest("hex");
+ 
+   // The old helper was named constantTimeEquals but used Buffer.compare,
+diff --git a/apps/settlement/internal/internalapi/server.go b/apps/settlement/internal/internalapi/server.go
+index eeaeb84..39d9c8a 100644
+--- a/apps/settlement/internal/internalapi/server.go
++++ b/apps/settlement/internal/internalapi/server.go
+@@ -235,6 +235,10 @@ func handleRunBatch(pool *pgxpool.Pool) http.Handler {
+ 		}
+ 
+ 		report, err := settlement.RunDailyBatch(r.Context(), pool, businessDate, onlyMerchant)
++		if errors.Is(err, settlement.ErrBusinessDayNotComplete) {
++			writeJSON(w, http.StatusBadRequest, errorResponse{Error: "business_day_not_complete"})
++			return
++		}
+ 		if err != nil {
+ 			log.Printf("settlement internal api: run-batch(%s) failed: %v", body.Date, err)
+ 			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "run_batch_failed"})
+diff --git a/apps/settlement/internal/settlement/batch.go b/apps/settlement/internal/settlement/batch.go
+index 74782f9..fd2c17e 100644
+--- a/apps/settlement/internal/settlement/batch.go
++++ b/apps/settlement/internal/settlement/batch.go
+@@ -22,6 +22,21 @@ import (
+ // (RunDailyBatch) already filters merchants before ever calling it.
+ var ErrMerchantNotEligible = errors.New("settlement: merchant not found or not eligible for settlement")
+ 
++// ErrBusinessDayNotComplete is returned when asked to close a business day
++// whose Asia/Bahrain window has not ended yet. Closing it early freezes the
++// batch, and every capture later that same day is left outside any batch for
++// good: the next run for that date is a no-op on the closed batch, and the
++// next day's window does not reach back.
++var ErrBusinessDayNotComplete = errors.New("settlement: business day has not ended yet")
++
++// AssertBusinessDayComplete refuses a business date whose window is still open.
++func AssertBusinessDayComplete(businessDate time.Time) error {
++	if _, end := BusinessDayWindow(businessDate); end.After(time.Now()) {
++		return ErrBusinessDayNotComplete
++	}
++	return nil
++}
++
+ // BatchResult is CloseBatch's return value.
+ type BatchResult struct {
+ 	BatchID       uuid.UUID
+@@ -60,6 +75,9 @@ type eligibleEvent struct {
+ func CloseBatch(ctx context.Context, db *pgxpool.Pool, merchantID uuid.UUID, businessDate time.Time) (BatchResult, error) {
+ 	start, end := BusinessDayWindow(businessDate)
+ 	batchDateOnly := time.Date(businessDate.Year(), businessDate.Month(), businessDate.Day(), 0, 0, 0, 0, time.UTC)
++	if err := AssertBusinessDayComplete(businessDate); err != nil {
++		return BatchResult{}, err
++	}
+ 
+ 	tx, err := db.Begin(ctx)
+ 	if err != nil {
+@@ -430,6 +448,18 @@ func PayoutBatch(ctx context.Context, db *pgxpool.Pool, batchID uuid.UUID) (Payo
+ 		if err != nil {
+ 			return PayoutResult{}, fmt.Errorf("settlement: PayoutBatch: post payout legs: %w", err)
+ 		}
++
++		// The payout-rail instruction record, one per paid batch, in the
++		// same transaction as the legs (migration 0057). It used to be a side
++		// effect of the first settlement.paid webhook delivery: duplicated per
++		// endpoint and per replay, and missing for merchants with no endpoint.
++		_, err = tx.Exec(ctx, `
++			INSERT INTO settlement_payout_disbursements (settlement_batch_id, amount_fils, disbursement_reference)
++			VALUES ($1, $2, 'disb_' || gen_random_uuid())
++		`, batchID, netPayout)
++		if err != nil {
++			return PayoutResult{}, fmt.Errorf("settlement: PayoutBatch: record disbursement: %w", err)
++		}
+ 	}
+ 
+ 	// Runs unconditionally, including for a zero-payout batch: adding zero
+@@ -487,6 +517,10 @@ type MerchantBatchOutcome struct {
+ // between concurrent goroutines each trying to FOR UPDATE a
+ // settlement_batches row.
+ func RunDailyBatch(ctx context.Context, db *pgxpool.Pool, businessDate time.Time, onlyMerchant *uuid.UUID) (DailyBatchReport, error) {
++	if err := AssertBusinessDayComplete(businessDate); err != nil {
++		return DailyBatchReport{}, err
++	}
++
+ 	var merchantIDs []uuid.UUID
+ 	if onlyMerchant != nil {
+ 		merchantIDs = []uuid.UUID{*onlyMerchant}
+diff --git a/apps/settlement/internal/settlement/platform_volume.go b/apps/settlement/internal/settlement/platform_volume.go
+index c60618b..121290e 100644
+--- a/apps/settlement/internal/settlement/platform_volume.go
++++ b/apps/settlement/internal/settlement/platform_volume.go
+@@ -2,6 +2,8 @@ package settlement
+ 
+ import (
+ 	"context"
++	"log"
++	"math"
+ 
+ 	"github.com/jackc/pgx/v5"
+ )
+@@ -23,7 +25,19 @@ func ReadAndLockPlatformProcessedFils(ctx context.Context, tx pgx.Tx) (int32, er
+ // happens here rather than as SQL `SET x = x + $2` so the value written is
+ // derived from exactly the value this batch's fee calculation read.
+ func RecordPlatformProcessedVolume(ctx context.Context, tx pgx.Tx, current int32, batchGrossFils int64) error {
+-	updated := current + int32(batchGrossFils)
++	// The column is INTEGER and widening it needs an approved migration plan,
++	// so the sum is clamped instead of wrapped. int32 addition wrapped
++	// silently past 2,147,483,647 fils: the counter went negative, fell
++	// below the volume-tier threshold (2,000,000,000), and switched the
++	// platform-wide MDR bonus back off. Lifetime volume never decreases, so a
++	// clamped counter keeps the tier decision right; the exact total needs
++	// the column widened.
++	sum := int64(current) + batchGrossFils
++	if sum > math.MaxInt32 {
++		log.Printf("settlement: platform_stats.total_processed_fils clamped at %d (INTEGER column is full)", math.MaxInt32)
++		sum = math.MaxInt32
++	}
++	updated := int32(sum)
+ 	_, err := tx.Exec(ctx, `
+ 		UPDATE platform_stats SET total_processed_fils = $1, updated_at = now() WHERE id = 1
+ 	`, updated)
+diff --git a/apps/settlement/internal/splits/allocate.go b/apps/settlement/internal/splits/allocate.go
+index 851a06b..23f10b9 100644
+--- a/apps/settlement/internal/splits/allocate.go
++++ b/apps/settlement/internal/splits/allocate.go
+@@ -141,6 +141,18 @@ func PayoutSplitBatch(ctx context.Context, db *pgxpool.Pool, batchID uuid.UUID)
+ 		totalAllocated += s.AllocatedFils
+ 	}
+ 
++	// One disbursement record per paid batch, as PayoutBatch writes for a
++	// non-split merchant (migration 0057).
++	if totalAllocated > 0 {
++		_, err = tx.Exec(ctx, `
++			INSERT INTO settlement_payout_disbursements (settlement_batch_id, amount_fils, disbursement_reference)
++			VALUES ($1, $2, 'disb_' || gen_random_uuid())
++		`, batchID, int64(totalAllocated))
++		if err != nil {
++			return SplitPayoutResult{}, err
++		}
++	}
++
+ 	// Bring the parent's cached balance down by what the legs above actually
+ 	// debited from its merchant_payable account, same as PayoutBatch does
+ 	// for a non-split merchant.
+@@ -149,6 +161,18 @@ func PayoutSplitBatch(ctx context.Context, db *pgxpool.Pool, batchID uuid.UUID)
+ 		return SplitPayoutResult{}, err
+ 	}
+ 
++	// The lifetime payout monitoring counter PayoutBatch bumps
++	// (settlement.UpdateLifetimePayoutMonitoringEstimate; not callable from
++	// here without an import cycle). Split parents were never counted.
++	_, err = tx.Exec(ctx, `
++		UPDATE merchants
++		   SET lifetime_net_payout_monitoring_estimate = lifetime_net_payout_monitoring_estimate + $2
++		 WHERE id = $1
++	`, parentMerchantID, float32(netPayout))
++	if err != nil {
++		return SplitPayoutResult{}, err
++	}
++
+ 	_, err = tx.Exec(ctx, `UPDATE settlement_batches SET status = 'paid', paid_at = now() WHERE id = $1`, batchID)
+ 	if err != nil {
+ 		return SplitPayoutResult{}, err
+diff --git a/apps/web/src/format.ts b/apps/web/src/format.ts
+index cc985a2..229970a 100644
+--- a/apps/web/src/format.ts
++++ b/apps/web/src/format.ts
+@@ -6,10 +6,13 @@ import { formatBhd, toFils } from "@filspay/money";
+  * so there is exactly one answer to "how is a BHD amount shown" across both
+  * halves of this app. Never `/1000`, never `toFixed`.
+  */
+-// FH: toFils without allowNegative throws on a negative — refund events / negative gaps crash the page?
+-// MK: amounts are never negative in the dashboard. ignore
++// Signed on purpose: a refund's timeline event carries a negative delta
++// (migration 0044) and a reconciliation gap or pending figure can be
++// negative. toFils without allowNegative threw a RangeError while rendering,
++// which blanked the transaction detail page of every refunded transaction
++// and the reconciliation page. Same call the admin console's bhd() makes.
+ export function bhd(amountFils: number): string {
+-  return `${formatBhd(toFils(amountFils))} BHD`;
++  return `${formatBhd(toFils(amountFils, { allowNegative: true }))} BHD`;
+ }
+ 
+ /** `—` for a null/absent value, so an empty table cell is visibly empty
+diff --git a/ops/docker-compose.yml b/ops/docker-compose.yml
+index 9d09aea..fedcea1 100644
+--- a/ops/docker-compose.yml
++++ b/ops/docker-compose.yml
+@@ -23,7 +23,9 @@ services:
+       POSTGRES_PASSWORD: filspay_dev_password
+       POSTGRES_DB: filspay
+     ports:
+-      - "5432:5432"
++      # Loopback only. The hosted box runs this same file, and "5432:5432"
++      # published Postgres, with the password above, on every interface.
++      - "127.0.0.1:5432:5432"
+     volumes:
+       - filspay_pgdata:/var/lib/postgresql/data
+     healthcheck:
+diff --git a/scripts/expire_holds.ts b/scripts/expire_holds.ts
+index af49af6..0f0057d 100644
+--- a/scripts/expire_holds.ts
++++ b/scripts/expire_holds.ts
+@@ -14,9 +14,9 @@ import { buildDelete } from "./lib/sqlFilter.js";
+ 
+ /** Holds that outlived their authorization window without being captured
+  *  or released — the candidate set for tonight's cleanup. */
+-export async function fetchExpiredHoldIds(client: Client): Promise<string[]> {
++export async function fetchExpiredHoldIds(client: Client, opts: { forUpdate?: boolean } = {}): Promise<string[]> {
+   const result = await client.query<{ id: string }>(
+-    `SELECT id FROM holds WHERE status = 'active' AND expires_at < now()`,
++    `SELECT id FROM holds WHERE status = 'active' AND expires_at < now()${opts.forUpdate ? " FOR UPDATE" : ""}`,
+   );
+   return result.rows.map((r) => r.id);
+ }
+@@ -39,13 +39,24 @@ async function main(): Promise<void> {
+   const client = new Client({ connectionString: databaseUrl });
+   await client.connect();
+   try {
+-    // FH: SELECT then DELETE, a hold could be captured in between. claude: "negligible window, fine."
+-    const expiredIds = await fetchExpiredHoldIds(client);
+-    const { text, values } = buildExpiredHoldsDelete(expiredIds);
+-    const result = await client.query(text, values);
+-    console.log(
+-      `expire_holds: matched ${expiredIds.length} abandoned hold(s), deleted ${result.rowCount ?? 0} row(s)`,
+-    );
++    // One transaction, candidate rows locked: a capture or void releasing one
++    // of these holds waits for us instead of having its hold deleted between
++    // the SELECT and the DELETE. A night with nothing expired deletes nothing
++    // — an empty id list used to drop the WHERE clause and empty the table.
++    await client.query("BEGIN");
++    try {
++      const expiredIds = await fetchExpiredHoldIds(client, { forUpdate: true });
++      let deleted = 0;
++      if (expiredIds.length > 0) {
++        const { text, values } = buildExpiredHoldsDelete(expiredIds);
++        deleted = (await client.query(text, values)).rowCount ?? 0;
++      }
++      await client.query("COMMIT");
++      console.log(`expire_holds: matched ${expiredIds.length} abandoned hold(s), deleted ${deleted} row(s)`);
++    } catch (err) {
++      await client.query("ROLLBACK");
++      throw err;
++    }
+   } finally {
+     await client.end();
+   }
+diff --git a/scripts/lib/sqlFilter.ts b/scripts/lib/sqlFilter.ts
+index ab7e89e..ae86a43 100644
+--- a/scripts/lib/sqlFilter.ts
++++ b/scripts/lib/sqlFilter.ts
+@@ -7,7 +7,12 @@ export function buildWhere(
+   for (const [col, val] of Object.entries(filters)) {
+     if (val === undefined || val === null) continue;
+     if (Array.isArray(val)) {
+-      if (val.length === 0) continue;
++      // An empty list matches nothing. Skipping it dropped the predicate, so
++      // buildDelete("holds", { id: [] }) became `DELETE FROM holds`.
++      if (val.length === 0) {
++        parts.push("FALSE");
++        continue;
++      }
+       values.push(val);
+       parts.push(`${col} = ANY($${idx}::uuid[])`);
+       idx++;

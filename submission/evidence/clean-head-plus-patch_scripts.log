@@ -1,0 +1,89 @@
+✔ the delete is scoped to exactly the ids it was handed (1.878958ms)
+✔ a single id still goes through the array predicate rather than a bare equality (0.093417ms)
+generating 2000 synthetic capture entries...
+  inserted 200/2000 entries...
+  inserted 400/2000 entries...
+  inserted 600/2000 entries...
+  inserted 800/2000 entries...
+  inserted 1000/2000 entries...
+  inserted 1200/2000 entries...
+  inserted 1400/2000 entries...
+  inserted 1600/2000 entries...
+  inserted 1800/2000 entries...
+  inserted 2000/2000 entries...
+
+daily totals:
+  March 01: 64 captures, gross 32327.782, residue 302 fils
+  March 02: 65 captures, gross 30099.447, residue 317 fils
+  March 03: 69 captures, gross 33655.885, residue 325 fils
+  March 04: 70 captures, gross 33553.609, residue 329 fils
+  March 05: 66 captures, gross 36359.132, residue 352 fils
+  March 06: 54 captures, gross 27893.568, residue 258 fils
+  March 07: 62 captures, gross 30017.046, residue 306 fils
+  March 08: 80 captures, gross 39628.807, residue 347 fils
+  March 09: 69 captures, gross 31592.241, residue 301 fils
+  March 10: 63 captures, gross 30046.304, residue 274 fils
+  March 11: 53 captures, gross 25042.421, residue 231 fils
+  March 12: 63 captures, gross 29683.830, residue 280 fils
+  March 13: 60 captures, gross 29001.004, residue 244 fils
+  March 14: 67 captures, gross 31413.917, residue 337 fils
+  March 15: 52 captures, gross 27721.444, residue 234 fils
+  March 16: 76 captures, gross 38748.820, residue 340 fils
+  March 17: 62 captures, gross 31211.899, residue 259 fils
+  March 18: 66 captures, gross 39692.633, residue 283 fils
+  March 19: 58 captures, gross 29966.178, residue 288 fils
+  March 20: 66 captures, gross 33850.455, residue 285 fils
+  March 21: 62 captures, gross 30361.010, residue 290 fils
+  March 22: 71 captures, gross 34998.430, residue 310 fils
+  March 23: 71 captures, gross 35154.114, residue 324 fils
+  March 24: 59 captures, gross 31286.129, residue 259 fils
+  March 25: 70 captures, gross 33916.972, residue 302 fils
+  March 26: 63 captures, gross 31359.328, residue 308 fils
+  March 27: 61 captures, gross 29593.627, residue 257 fils
+  March 28: 69 captures, gross 36443.718, residue 288 fils
+  March 29: 56 captures, gross 30404.160, residue 280 fils
+  March 30: 59 captures, gross 30295.325, residue 255 fils
+  March 31: 74 captures, gross 37303.912, residue 332 fils
+
+total gross: 1002623.147 BD
+total residue: 9.097 BD (9097 fils)
+db-computed residue: 9097 fils
+db mod-10 residue: 9097 fils
+db floor-formula residue: 9097 fils
+
+reconciliation stress test passed: all three residue methods agree
+✔ reconciliation stress: 2000 ledger entries with zero net residual (833.657166ms)
+✔ computeResidueFils returns the amount lost to 2dp quantization (0.65775ms)
+✖ monthBounds for March 2026 spans 31 days (2.119125ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 4
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1058.232333
+
+✖ failing tests:
+
+test at scripts/reconcile_march.test.ts:13:1
+✖ monthBounds for March 2026 spans 31 days (2.119125ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1 !== 2
+  
+      at TestContext.<anonymous> (<scratch-copy>/scripts/reconcile_march.test.ts:17:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1118:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:787:18)
+      at Test.postRun (node:internal/test_runner/test:1247:19)
+      at Test.run (node:internal/test_runner/test:1175:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:358:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 2,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+scripts exit 1

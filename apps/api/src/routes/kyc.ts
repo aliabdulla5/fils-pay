@@ -25,6 +25,15 @@ interface KycDocumentParams extends MerchantIdParams {
   documentId: string;
 }
 
+/** Content-Disposition for a stored, user-supplied filename. Node refuses
+ *  header values outside latin-1 (ERR_INVALID_CHAR), so an Arabic filename
+ *  made the download a 500; a quote or backslash broke the quoted string.
+ *  ASCII fallback plus the RFC 6266 filename* form. */
+function inlineDisposition(fileName: string): string {
+  const fallback = fileName.replace(/[^\x20-\x7e]|["\\]/g, "_");
+  return `inline; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+}
+
 function assertOwnMerchant(request: FastifyRequest<{ Params: MerchantIdParams }>): void {
   if (!request.auth || request.auth.merchantId !== request.params.merchantId) {
     throw new ForbiddenError("forbidden");
@@ -105,7 +114,7 @@ export async function kycRoutes(app: FastifyInstance): Promise<void> {
         request.params.documentId,
       );
       reply.header("Content-Type", file.mimeType);
-      reply.header("Content-Disposition", `inline; filename="${file.fileName}"`);
+      reply.header("Content-Disposition", inlineDisposition(file.fileName));
       return reply.send(file.buffer);
     },
   );
@@ -122,7 +131,7 @@ export async function kycRoutes(app: FastifyInstance): Promise<void> {
         request.params.documentId,
       );
       reply.header("Content-Type", file.mimeType);
-      reply.header("Content-Disposition", `inline; filename="${file.fileName}"`);
+      reply.header("Content-Disposition", inlineDisposition(file.fileName));
       return reply.send(file.buffer);
     },
   );

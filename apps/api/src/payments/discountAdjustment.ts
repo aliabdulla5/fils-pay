@@ -57,39 +57,30 @@ export async function applyCaptureDiscountAdjustment(
     // credit the merchant twice for one capture. The row lock serializes
     // this count against a concurrent capture's own adjustment.
     await client.query(`SELECT id FROM transactions WHERE id = $1 FOR UPDATE`, [input.transactionId]);
-    const countRow = await client.query<{ capture_events: string; adjustments: string }>(
-      `SELECT (SELECT count(*) FROM transaction_events
-                WHERE transaction_id = $1 AND event_type IN ('captured', 'partially_captured')) AS capture_events,
-              (SELECT count(*) FROM ledger_entries
-                WHERE transaction_id = $1 AND direction = 'credit'
-                  AND description = 'capture: negotiated discount adjustment') AS adjustments`,
-      [input.transactionId],
-    );
-    const counts = countRow.rows[0];
-    if (counts && Number(counts.adjustments) >= Number(counts.capture_events)) return;
 
-    const eventRow = await client.query<{ amount_fils: string; metadata: { feeFils?: number; mdrBps?: number } }>(
-      `SELECT amount_fils, metadata FROM transaction_events
+    // Match adjustments to the capture events that are owed one, oldest
+    // first. Comparing "adjustments < capture events" and then adjusting the
+    // latest event broke as soon as one capture was owed nothing (a small
+    // capture whose discount rounds to 0): the counts never caught up, so a
+    // replay of that capture credited the latest capture's discount again.
+    const events = await client.query<{ metadata: { feeFils?: number } }>(
+      `SELECT metadata FROM transaction_events
         WHERE transaction_id = $1 AND event_type IN ('captured', 'partially_captured')
-        ORDER BY occurred_at DESC, id DESC LIMIT 1`,
+        ORDER BY occurred_at ASC, id ASC`,
       [input.transactionId],
     );
-    const event = eventRow.rows[0];
-    const feeBeforeDiscount = toFils(event?.metadata?.feeFils ?? 0);
-    if (!event || feeBeforeDiscount <= 0) return;
-
-    // ARCHITECTURE.md: "Discounts reduce the amount the MDR is charged on" —
-    // the order settlement's ComputeSettlementFee (discounted_fee.go) uses.
-    // Discounting the already-rounded fee instead rounds differently (602
-    // fils at 275 bps / 12.5%: fee-first nets 15, amount-first nets 14), so
-    // the ledger and the settlement batch disagreed by a fils on such
-    // captures and reconciliation never tied. The adjustment is whatever
-    // brings the charged fee down to the settlement figure.
-    const amountFils = toFils(Number(event.amount_fils));
-    const mdrBps = event.metadata?.mdrBps ?? merchantRow.rows[0]?.mdr_bps ?? 0;
-    const settlementFee = applyRateFils(subtractFils(amountFils, applyRateFils(amountFils, discountBps)), mdrBps);
-    if (compareFils(settlementFee, feeBeforeDiscount) >= 0) return;
-    const discountFils = subtractFils(feeBeforeDiscount, settlementFee);
+    const owed = events.rows
+      .map((event) => applyRateFils(toFils(event.metadata?.feeFils ?? 0), discountBps))
+      .filter((discount) => discount > 0);
+    const adjusted = await client.query<{ adjustments: string }>(
+      `SELECT count(*) AS adjustments FROM ledger_entries
+        WHERE transaction_id = $1 AND direction = 'credit'
+          AND description = 'capture: negotiated discount adjustment'`,
+      [input.transactionId],
+    );
+    const alreadyAdjusted = Number(adjusted.rows[0]?.adjustments ?? 0);
+    if (alreadyAdjusted >= owed.length) return;
+    const discountFils = owed[alreadyAdjusted]!;
 
     const entryGroupId = randomUUID();
     await client.query(

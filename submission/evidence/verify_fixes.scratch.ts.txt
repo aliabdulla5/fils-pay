@@ -1,0 +1,163 @@
+// Scratch verification for this review's fixes. Lives only in the scratchpad copy.
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { Pool } from "pg";
+import { resolveReportMerchantId } from "./apps/api/src/reporting/scope.js";
+import { refreshAnalyticsRollups } from "./apps/api/src/admin/reportingRebuild.js";
+import { buildDelete } from "./scripts/lib/sqlFilter.js";
+import { bhd } from "./apps/web/src/format.js";
+import { buildApp } from "./apps/api/src/app.js";
+import { loadConfig } from "./apps/api/src/config.js";
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const results: string[] = [];
+const ok = (name: string) => results.push(`PASS ${name}`);
+
+async function merchant(): Promise<string> {
+  const r = await pool.query<{ id: string }>(
+    `INSERT INTO merchants (display_name, mdr_bps, status, test_mode) VALUES ($1, 250, 'active', false) RETURNING id`,
+    [`verify-${randomUUID()}`],
+  );
+  return r.rows[0]!.id;
+}
+
+async function main(): Promise<void> {
+  // 1. split-child IDOR
+  const a = await merchant();
+  const parentB = await merchant();
+  const childB = await merchant();
+  await pool.query(
+    `INSERT INTO merchant_split_children (parent_merchant_id, child_merchant_id, split_weight_bps) VALUES ($1, $2, 10000)`,
+    [parentB, childB],
+  );
+  assert.equal(await resolveReportMerchantId(pool, a, childB), a, "unrelated merchant must not resolve to B's child");
+  assert.equal(await resolveReportMerchantId(pool, parentB, childB), childB, "parent still reaches its own child");
+  ok("report scope: only the caller's own split children");
+
+  // 2. empty array no longer drops the WHERE clause
+  assert.equal(buildDelete("holds", { id: [] }).text, "DELETE FROM holds WHERE FALSE");
+  assert.equal(buildDelete("holds", { id: ["x"] }).text, "DELETE FROM holds WHERE id = ANY($1::uuid[])");
+  ok("sqlFilter: empty id list matches nothing");
+
+  // 3. negative amounts render
+  assert.equal(bhd(-4750), "-4.750 BHD");
+  ok("web bhd: negative amounts render instead of throwing");
+
+  // 4. analytics rebuild keeps refunds and stops at the consumer watermark
+  const m = await merchant();
+  const insertEvent = async (type: string, payload: object): Promise<string> =>
+    (
+      await pool.query<{ id: string }>(
+        `INSERT INTO outbox_events (event_type, aggregate_type, aggregate_id, payload, created_at)
+         VALUES ($1, 'transaction', gen_random_uuid(), $2, '2026-10-01T10:00:00Z') RETURNING id`,
+        [type, JSON.stringify(payload)],
+      )
+    ).rows[0]!.id;
+  await insertEvent("transaction.captured", { merchantId: m, amountCapturedFils: 10_000 });
+  const refundId = await insertEvent("refund.succeeded", { merchantId: m, amountFils: 2_500 });
+  await pool.query(
+    `INSERT INTO reporting_outbox_cursor (consumer_name, last_processed_id) VALUES ('reporting', $1)
+     ON CONFLICT (consumer_name) DO UPDATE SET last_processed_id = $1`,
+    [refundId],
+  );
+  await insertEvent("transaction.captured", { merchantId: m, amountCapturedFils: 99_000 }); // past the watermark
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await refreshAnalyticsRollups(client);
+    await client.query("COMMIT");
+  } finally {
+    client.release();
+  }
+  const row = (
+    await pool.query(
+      `SELECT captured_count, captured_gross_fils::int AS gross, refund_count, refund_gross_fils::int AS refunds
+         FROM merchant_daily_volume WHERE merchant_id = $1`,
+      [m],
+    )
+  ).rows[0];
+  assert.deepEqual(row, { captured_count: 1, gross: 10_000, refund_count: 1, refunds: 2_500 });
+  ok("analytics rebuild: refunds kept, nothing past the consumer watermark counted");
+
+  // 5. routes: export-summary auth, business profile unknown key, export date validation
+  const config = loadConfig({ ...process.env, NODE_ENV: "test" });
+  const app = buildApp(config, pool);
+  await app.ready();
+  const unauth = await app.inject({ method: "GET", url: "/v1/reporting/export-summary" });
+  assert.equal(unauth.statusCode, 401, unauth.body);
+  ok("GET /v1/reporting/export-summary unauthenticated -> 401 (was 500)");
+
+  const signup = await app.inject({
+    method: "POST",
+    url: "/v1/merchants",
+    payload: {
+      businessProfile: {
+        legalName: "Verify WLL",
+        registrationNumber: `CR-${randomUUID().slice(0, 8)}`,
+        businessType: "llc",
+        contactEmail: "v@example.com",
+        contactPhone: "+97300000000",
+        addressLine1: "Road 1",
+        city: "Manama",
+      },
+      owner: { email: `owner-${randomUUID()}@example.com`, password: "correct horse battery staple" },
+    },
+  });
+  assert.equal(signup.statusCode, 201, signup.body);
+  const { merchantId } = signup.json() as { merchantId: string };
+  await pool.query(`UPDATE merchants SET status = 'active' WHERE id = $1`, [merchantId]);
+  const email = (await pool.query(`SELECT email FROM merchant_users WHERE merchant_id = $1`, [merchantId])).rows[0].email;
+  const login = await app.inject({
+    method: "POST",
+    url: "/v1/auth/login",
+    payload: { merchantId, email, password: "correct horse battery staple" },
+  });
+  assert.equal(login.statusCode, 200, login.body);
+  const pendingCookie = String(login.headers["set-cookie"]).split(";")[0]!;
+  const verify = await app.inject({
+    method: "POST",
+    url: "/v1/auth/otp/verify",
+    headers: { cookie: pendingCookie },
+    payload: { code: (login.json() as { devOtpCode: string }).devOtpCode },
+  });
+  assert.equal(verify.statusCode, 200, verify.body);
+  const setCookie = String(verify.headers["set-cookie"] ?? "");
+  assert.match(setCookie, new RegExp(`Max-Age=${config.sessionTtlHours * 3600}`));
+  ok("merchant OTP verify re-issues the cookie with the session TTL");
+  const cookie = setCookie.split(";")[0]!;
+
+  const patch = await app.inject({
+    method: "PATCH",
+    url: `/v1/merchants/${merchantId}/business-profile`,
+    headers: { cookie },
+    payload: { city: "Muharraq", mdrBps: 1 },
+  });
+  assert.equal(patch.statusCode, 200, patch.body);
+  assert.equal((patch.json() as { city: string }).city, "Muharraq");
+  ok("business profile PATCH ignores unknown keys (was 500)");
+
+  const badExport = await app.inject({
+    method: "GET",
+    url: "/v1/transactions/export?from=garbage",
+    headers: { cookie },
+  });
+  assert.equal(badExport.statusCode, 400, badExport.body);
+  const badList = await app.inject({ method: "GET", url: "/v1/transactions?to=nope", headers: { cookie } });
+  assert.equal(badList.statusCode, 400, badList.body);
+  ok("transactions list/export reject invalid from/to with 400 (was 500)");
+
+  const summary = await app.inject({ method: "GET", url: "/v1/reporting/export-summary", headers: { cookie } });
+  assert.equal(summary.statusCode, 200, summary.body);
+  ok("GET /v1/reporting/export-summary authenticated -> 200");
+
+  await app.close();
+}
+
+main()
+  .then(() => console.log(results.join("\n")))
+  .catch((err) => {
+    console.log(results.join("\n"));
+    console.error("FAIL", err);
+    process.exitCode = 1;
+  })
+  .finally(() => pool.end());

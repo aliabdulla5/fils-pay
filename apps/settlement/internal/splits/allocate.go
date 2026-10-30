@@ -141,11 +141,35 @@ func PayoutSplitBatch(ctx context.Context, db *pgxpool.Pool, batchID uuid.UUID) 
 		totalAllocated += s.AllocatedFils
 	}
 
+	// One disbursement record per paid batch, as PayoutBatch writes for a
+	// non-split merchant (migration 0057).
+	if totalAllocated > 0 {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO settlement_payout_disbursements (settlement_batch_id, amount_fils, disbursement_reference)
+			VALUES ($1, $2, 'disb_' || gen_random_uuid())
+		`, batchID, int64(totalAllocated))
+		if err != nil {
+			return SplitPayoutResult{}, err
+		}
+	}
+
 	// Bring the parent's cached balance down by what the legs above actually
 	// debited from its merchant_payable account, same as PayoutBatch does
 	// for a non-split merchant.
 	// am: should pass netPayout here not totalAllocated, otherwise the cache drifts from the batch
 	if err := balances.ApplyPayout(ctx, tx, parentMerchantID, batchID, totalAllocated); err != nil {
+		return SplitPayoutResult{}, err
+	}
+
+	// The lifetime payout monitoring counter PayoutBatch bumps
+	// (settlement.UpdateLifetimePayoutMonitoringEstimate; not callable from
+	// here without an import cycle). Split parents were never counted.
+	_, err = tx.Exec(ctx, `
+		UPDATE merchants
+		   SET lifetime_net_payout_monitoring_estimate = lifetime_net_payout_monitoring_estimate + $2
+		 WHERE id = $1
+	`, parentMerchantID, float32(netPayout))
+	if err != nil {
 		return SplitPayoutResult{}, err
 	}
 

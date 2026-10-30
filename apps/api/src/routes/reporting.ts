@@ -76,7 +76,9 @@ export async function reportingRoutes(app: FastifyInstance): Promise<void> {
     async (request) => listSavedFilters(app.db, { merchantId: request.merchantAuth!.merchantId }),
   );
 
-  app.get("/export-summary", async (request) => {
+  // Registered without a preHandler, so request.merchantAuth was never set
+  // and every call died on the non-null assertion below with a 500.
+  app.get("/export-summary", { preHandler: requireMerchantAuth }, async (request) => {
     const result = await app.db.query(
       `SELECT COUNT(*) AS total, SUM(captured_gross_fils) AS gross
          FROM merchant_daily_volume WHERE merchant_id = $1`,

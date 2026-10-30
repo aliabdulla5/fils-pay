@@ -8,6 +8,16 @@ interface MerchantIdParams {
   merchantId: string;
 }
 
+/** merchant_business_profiles.business_type CHECK (migration 0014). Anything
+ *  else reached the INSERT/UPDATE and came back as a 500. */
+const BUSINESS_TYPES: readonly string[] = ["sole_proprietorship", "llc", "partnership", "public_company", "other"];
+
+function assertBusinessType(value: unknown): void {
+  if (value !== undefined && (typeof value !== "string" || !BUSINESS_TYPES.includes(value))) {
+    throw new BadRequestError("invalid_request", `businessType must be one of ${BUSINESS_TYPES.join(", ")}`);
+  }
+}
+
 /**
  * Registered with prefix '/v1/merchants'. Colocates two things that share
  * that prefix: merchant signup (POST /v1/merchants, the collection-level
@@ -37,6 +47,7 @@ export async function businessProfileRoutes(app: FastifyInstance): Promise<void>
     ) {
       throw new BadRequestError("invalid_request", "missing required business profile or owner fields");
     }
+    assertBusinessType(bp.businessType);
 
     const result = await createMerchantWithOwner(app.db, app.config, body as SignupInput);
     reply.code(201).send({
@@ -61,6 +72,7 @@ export async function businessProfileRoutes(app: FastifyInstance): Promise<void>
     { preHandler: [requireSession, requireRole("owner", "finance")] },
     async (request) => {
       assertOwnMerchant(request);
+      assertBusinessType(request.body?.businessType);
       const profile = await updateBusinessProfile(app.db, request.params.merchantId, request.body ?? {});
       return profile;
     },

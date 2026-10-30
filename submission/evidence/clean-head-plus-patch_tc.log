@@ -1,0 +1,29 @@
+
+> filspay@0.1.0 typecheck
+> npm run typecheck --workspaces --if-present && tsc -p db --noEmit && tsc -p scripts --noEmit
+
+
+> @filspay/events@0.1.0 typecheck
+> tsc --noEmit
+
+
+> @filspay/money@0.1.0 typecheck
+> tsc --noEmit
+
+
+> @filspay/admin@0.1.0 typecheck
+> tsc --noEmit
+
+
+> @filspay/api@0.1.0 typecheck
+> tsc --noEmit
+
+
+> @filspay/reporting@0.1.0 typecheck
+> tsc --noEmit
+
+
+> @filspay/web@0.1.0 typecheck
+> tsc --noEmit
+
+typecheck exit 0
