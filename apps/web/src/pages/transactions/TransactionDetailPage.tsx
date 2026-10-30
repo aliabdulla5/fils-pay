@@ -8,7 +8,8 @@ import {
 } from "../../api/transactions.js";
 import { ApiError, describeError } from "../../api/client.js";
 import { RequireRole } from "../../auth/RequireRole.js";
-import { bhd, dash, dateTime } from "../../format.js";
+import { Card, ErrorMessage, Loading, Money, PageHeader, StatusBadge, statusLabel } from "../../components/ui.js";
+import { dash, dateTime } from "../../format.js";
 import type { TransactionDto, TransactionEventDto } from "../../types.js";
 import { RefundDrawer } from "./RefundDrawer.js";
 
@@ -107,25 +108,27 @@ export function TransactionDetailPage() {
     }
   }
 
+  const back = { to: "/dashboard/transactions", label: "Transactions" };
+
   if (state.kind === "loading") {
-    return <p>Loading...</p>;
+    return <Loading />;
   }
   if (state.kind === "not_found") {
     return (
-      <section>
-        <h1>Transaction not found</h1>
-        <p>
-          No transaction with this id exists on your account.{" "}
+      <section className="dash-page">
+        <PageHeader back={back} title="Transaction not found" />
+        <div className="dash-card dash-empty">
+          <p>No transaction with this id exists on your account.</p>
           <Link to="/dashboard/transactions">Back to transactions</Link>
-        </p>
+        </div>
       </section>
     );
   }
   if (state.kind === "error") {
     return (
-      <section>
-        <h1>Transaction</h1>
-        <p className="dash-error">{state.message}</p>
+      <section className="dash-page">
+        <PageHeader back={back} title="Transaction" />
+        <ErrorMessage>{state.message}</ErrorMessage>
       </section>
     );
   }
@@ -135,135 +138,172 @@ export function TransactionDetailPage() {
   const voidable = txn.status === "authorized";
 
   return (
-    <section>
-      <h1>Transaction</h1>
-      <p className="dash-muted">
-        <code>{txn.id}</code>
-      </p>
-
-      <dl className="dash-dl">
-        <dt>Status</dt>
-        <dd>
-          <span className={`dash-status dash-status-${txn.status}`}>{txn.status}</span>
-        </dd>
-        <dt>Authorized amount</dt>
-        <dd>{bhd(txn.amountFils)}</dd>
-        <dt>Captured amount</dt>
-        <dd>{bhd(txn.capturedFils)}</dd>
-        <dt>Refunded amount</dt>
-        <dd>{bhd(txn.refundedFils)}</dd>
-        <dt>Currency</dt>
-        <dd>{txn.currency}</dd>
-        <dt>Reference</dt>
-        <dd>{dash(txn.reference)}</dd>
-        <dt>Acquirer reference</dt>
-        <dd>
-          <code>{txn.acquirerReference}</code>
-        </dd>
-        <dt>Occurred at</dt>
-        <dd>{dateTime(txn.occurredAt)}</dd>
-        <dt>Created at</dt>
-        <dd>{dateTime(txn.createdAt)}</dd>
-      </dl>
-
-      {/* Capture and void are hidden from `support` as a UX choice — a support
-          agent looks things up, they don't move money. Unlike the
-          reconciliation page, this hide is NOT backed by a matching
-          server-side role check: the API gates capture/void at "any
-          authenticated merchant actor". Do not mistake a hidden button here for a security
-          boundary. */}
-      <RequireRole allow={["owner", "finance"]}>
-        {capturable || voidable ? (
-          <div className="dash-actions">
-            {actionError ? <p className="dash-error">{actionError}</p> : null}
-
-            {capturable ? (
-              captureOpen ? (
-                <form className="dash-form dash-form-inline" onSubmit={(e) => void handleCapture(e)}>
-                  <label>
-                    Amount in fils (blank captures everything outstanding)
-                    <input
-                      type="number"
-                      min={1}
-                      step={1}
-                      value={captureAmount}
-                      onChange={(e) => setCaptureAmount(e.target.value)}
-                    />
-                  </label>
-                  <button type="submit" className="dash-button" disabled={submitting}>
-                    {submitting ? "Capturing..." : "Capture"}
-                  </button>
-                  <button
-                    type="button"
-                    className="dash-button"
-                    disabled={submitting}
-                    onClick={() => setCaptureOpen(false)}
-                  >
-                    Cancel
-                  </button>
-                </form>
-              ) : (
-                <button type="button" className="dash-button" onClick={() => setCaptureOpen(true)}>
+    <section className="dash-page">
+      <PageHeader
+        back={back}
+        title="Transaction"
+        badge={<StatusBadge status={txn.status} />}
+        description={<code>{txn.id}</code>}
+        actions={
+          <>
+            {/* Capture and void are hidden from `support` as a UX choice — a support
+                agent looks things up, they don't move money. Unlike the
+                reconciliation page, this hide is NOT backed by a matching
+                server-side role check: the API gates capture/void at "any
+                authenticated merchant actor". Do not mistake a hidden button here for a security
+                boundary. */}
+            <RequireRole allow={["owner", "finance"]}>
+              {capturable && !captureOpen ? (
+                <button
+                  type="button"
+                  className="dash-button dash-button-primary"
+                  onClick={() => setCaptureOpen(true)}
+                >
                   Capture
                 </button>
-              )
-            ) : null}
+              ) : null}
+              {voidable ? (
+                <button
+                  type="button"
+                  className="dash-button dash-button-danger"
+                  disabled={submitting}
+                  onClick={() => void handleVoid()}
+                >
+                  Void
+                </button>
+              ) : null}
+            </RequireRole>
+            <RefundDrawer txn={txn} onRefunded={load} />
+          </>
+        }
+      />
 
-            {voidable ? (
-              <button
-                type="button"
-                className="dash-button"
-                disabled={submitting}
-                onClick={() => void handleVoid()}
-              >
-                Void
-              </button>
-            ) : null}
-          </div>
+      <RequireRole allow={["owner", "finance"]}>
+        {(capturable || voidable) && actionError ? <ErrorMessage>{actionError}</ErrorMessage> : null}
+
+        {capturable && captureOpen ? (
+          <Card title="Capture funds" labelledBy="capture-title">
+            <form className="dash-card-body dash-form dash-form-inline" onSubmit={(e) => void handleCapture(e)}>
+              <label className="dash-field dash-field-grow">
+                Amount in fils
+                <span className="dash-input-affix">
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    autoFocus
+                    value={captureAmount}
+                    onChange={(e) => setCaptureAmount(e.target.value)}
+                    aria-describedby="capture-amount-hint"
+                  />
+                  <span className="dash-input-suffix">fils</span>
+                </span>
+                <span className="dash-field-hint" id="capture-amount-hint">
+                  Leave blank to capture everything outstanding.
+                </span>
+              </label>
+              <div className="dash-actions">
+                <button type="submit" className="dash-button dash-button-primary" disabled={submitting}>
+                  {submitting ? "Capturing..." : "Capture"}
+                </button>
+                <button
+                  type="button"
+                  className="dash-button"
+                  disabled={submitting}
+                  onClick={() => setCaptureOpen(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </Card>
         ) : null}
       </RequireRole>
 
-      <RefundDrawer txn={txn} onRefunded={load} />
+      <div className="dash-grid-detail">
+        <div className="dash-stack">
+          <div className="dash-card">
+            <div className="dash-hero">
+              <div>
+                <span className="dash-hero-label">Captured</span>
+                <Money fils={txn.capturedFils} size="xl" />
+              </div>
+            </div>
+            <div className="dash-figures">
+              <div className="dash-figure">
+                <span className="dash-figure-label">Authorized amount</span>
+                <span className="dash-figure-value">
+                  <Money fils={txn.amountFils} />
+                </span>
+              </div>
+              <div className="dash-figure">
+                <span className="dash-figure-label">Captured amount</span>
+                <span className="dash-figure-value">
+                  <Money fils={txn.capturedFils} />
+                </span>
+              </div>
+              <div className="dash-figure">
+                <span className="dash-figure-label">Refunded amount</span>
+                <span className="dash-figure-value">
+                  <Money fils={txn.refundedFils} />
+                </span>
+              </div>
+            </div>
+          </div>
 
-      <h2>Event timeline</h2>
-      <table className="dash-table">
-        <thead>
-          <tr>
-            <th>Occurred</th>
-            <th>Event</th>
-            <th>Amount</th>
-            <th>Actor</th>
-          </tr>
-        </thead>
-        <tbody>
-          {/* Already ordered oldest-first by the endpoint — never re-sorted
-              here, so the page can't disagree with the API about history. */}
-          {events.map((event) => (
-            <tr key={event.id}>
-              <td>{dateTime(event.occurredAt)}</td>
-              <td>{event.eventType}</td>
-              <td>{event.amountFils === null ? "—" : bhd(event.amountFils)}</td>
-              <td>
-                {event.actorType}
-                {event.actorId ? (
-                  <div className="dash-muted">
-                    <code>{event.actorId}</code>
-                  </div>
-                ) : null}
-              </td>
-            </tr>
-          ))}
-          {events.length === 0 ? (
-            <tr>
-              <td colSpan={4}>No events recorded.</td>
-            </tr>
-          ) : null}
-        </tbody>
-      </table>
+          <Card title="Event timeline" labelledBy="timeline-title">
+            {/* Already ordered oldest-first by the endpoint — never re-sorted
+                here, so the page can't disagree with the API about history. */}
+            {events.length > 0 ? (
+              <ol className="dash-timeline">
+                {events.map((event) => (
+                  <li key={event.id} className="dash-timeline-item">
+                    <span className="dash-timeline-dot" aria-hidden="true" />
+                    <span className="dash-timeline-title">{statusLabel(event.eventType)}</span>
+                    <span className="dash-timeline-amount">
+                      {event.amountFils === null ? "—" : <Money fils={event.amountFils} />}
+                    </span>
+                    <span className="dash-timeline-meta">
+                      {dateTime(event.occurredAt)} · {event.actorType}
+                      {event.actorId ? (
+                        <>
+                          {" "}
+                          <code>{event.actorId}</code>
+                        </>
+                      ) : null}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="dash-card-body dash-muted">No events recorded.</p>
+            )}
+          </Card>
+        </div>
 
-      <p>
-        <Link to="/dashboard/transactions">Back to transactions</Link>
-      </p>
+        <Card title="Details" labelledBy="details-title">
+          <div className="dash-card-body">
+            <dl className="dash-dl dash-dl-stacked">
+              <dt>Status</dt>
+              <dd>
+                <StatusBadge status={txn.status} />
+              </dd>
+              <dt>Currency</dt>
+              <dd>{txn.currency}</dd>
+              <dt>Reference</dt>
+              <dd>{dash(txn.reference)}</dd>
+              <dt>Acquirer reference</dt>
+              <dd>
+                <code>{txn.acquirerReference}</code>
+              </dd>
+              <dt>Occurred at</dt>
+              <dd>{dateTime(txn.occurredAt)}</dd>
+              <dt>Created at</dt>
+              <dd>{dateTime(txn.createdAt)}</dd>
+            </dl>
+          </div>
+        </Card>
+      </div>
     </section>
   );
 }

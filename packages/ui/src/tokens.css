@@ -1,0 +1,104 @@
+/* FilsPay design tokens.
+
+   Custom properties only — this file styles nothing by itself, so importing
+   it anywhere (including a bundle that also serves the public checkout) can
+   never change how an existing element looks.
+
+   Contrast notes, measured against WCAG 2.1:
+   - Coin Gold on ivory/white is 2.4:1 — never use it for text, icons or a
+     focus ring on a light surface. It is a fill and rule colour only.
+   - --fp-ink-3 is the lightest text colour allowed (4.7:1 on white,
+     4.5:1+ on ivory). Anything lighter is decoration, not text. */
+
+@layer fp-tokens {
+  :root {
+    /* Brand */
+    --fp-burgundy: #762d3d;
+    --fp-burgundy-hover: #5f2331;
+    --fp-burgundy-press: #4d1c28;
+    --fp-burgundy-tint: #f4e9eb;
+    --fp-gold: #c49a45;
+    --fp-gold-tint: #f6eedb;
+    --fp-sand: #e7d5a8;
+    --fp-ivory: #f8f5ef;
+    --fp-charcoal: #292b29;
+    --fp-olive: #63745a;
+
+    /* Surfaces */
+    --fp-canvas: var(--fp-ivory);
+    --fp-surface: #ffffff;
+    --fp-surface-sunken: #f3eee4;
+    --fp-surface-hover: #faf7f1;
+
+    /* Text */
+    --fp-ink: var(--fp-charcoal);
+    --fp-ink-2: #5c5f5a;
+    --fp-ink-3: #6b6e68;
+    --fp-ink-inverse: #ffffff;
+
+    /* Lines */
+    --fp-line: #e9e3d8;
+    --fp-line-strong: #d9d0c0;
+    --fp-line-input: #8b8e88; /* 3.3:1 on white — the WCAG floor for control borders */
+
+    /* Status (each ink passes 4.5:1 on its own tint) */
+    --fp-success-ink: #4f5d47;
+    --fp-success-tint: #edf1e8;
+    --fp-success-line: #c9d3c1;
+    --fp-warning-ink: #7a5712;
+    --fp-warning-tint: #fbf3e0;
+    --fp-warning-line: #ead5a6;
+    --fp-danger: #a3392b;
+    --fp-danger-hover: #87291d;
+    --fp-danger-tint: #fbedea;
+    --fp-danger-line: #efc6bf;
+    --fp-info-ink: #3f5566;
+    --fp-info-tint: #ebf0f3;
+    --fp-info-line: #cbd6de;
+    --fp-neutral-ink: #5c5f5a;
+    --fp-neutral-tint: #f1eee8;
+    --fp-neutral-line: #ddd7cc;
+
+    /* Type */
+    --fp-font-display: "Manrope Variable", "Manrope", ui-sans-serif, system-ui, sans-serif;
+    --fp-font-body: "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --fp-font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+    --fp-text-xs: 0.75rem;
+    --fp-text-sm: 0.8125rem;
+    --fp-text-base: 0.9375rem;
+    --fp-text-md: 1.0625rem;
+    --fp-text-lg: 1.3125rem;
+    --fp-text-xl: 1.75rem;
+    --fp-text-2xl: 2.25rem;
+
+    /* Space (4px base) */
+    --fp-space-1: 0.25rem;
+    --fp-space-2: 0.5rem;
+    --fp-space-3: 0.75rem;
+    --fp-space-4: 1rem;
+    --fp-space-5: 1.25rem;
+    --fp-space-6: 1.5rem;
+    --fp-space-8: 2rem;
+    --fp-space-10: 2.5rem;
+    --fp-space-12: 3rem;
+
+    /* Shape — three radii only, chosen by element size, not uniformly */
+    --fp-radius-sm: 4px;
+    --fp-radius-md: 6px;
+    --fp-radius-lg: 10px;
+
+    --fp-shadow-1: 0 1px 2px rgba(41, 43, 41, 0.05);
+    --fp-shadow-2: 0 12px 32px -12px rgba(41, 43, 41, 0.22), 0 2px 6px rgba(41, 43, 41, 0.06);
+
+    --fp-focus-ring: 0 0 0 2px var(--fp-surface), 0 0 0 4px var(--fp-burgundy);
+
+    /* z-index scale */
+    --fp-z-header: 20;
+    --fp-z-overlay: 40;
+    --fp-z-drawer: 50;
+
+    --fp-ease: cubic-bezier(0.2, 0, 0, 1);
+    --fp-duration: 160ms;
+  }
+}

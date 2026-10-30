@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { getReconciliation } from "../../api/settlement.js";
 import { ApiError, describeError } from "../../api/client.js";
+import { IconAlert, IconCheck } from "../../components/icons.js";
+import { ErrorMessage, Loading, Money, PageHeader } from "../../components/ui.js";
 import { bhd } from "../../format.js";
 import type { ReconciliationReport } from "../../types.js";
 
@@ -67,79 +69,107 @@ export function ReconciliationPage() {
 
   if (forbidden) {
     return (
-      <section>
-        <h1>Reconciliation</h1>
-        <p className="dash-error">
+      <section className="dash-page">
+        <PageHeader title="Reconciliation" />
+        <ErrorMessage>
           You don&apos;t have permission to view this report — ask an owner or
           finance user on your account.
-        </p>
+        </ErrorMessage>
       </section>
     );
   }
 
   return (
-    <section>
-      <h1>Reconciliation</h1>
+    <section className="dash-page">
+      <PageHeader
+        title="Reconciliation"
+        description="Checks that every fil your ledger says you're owed is either in a settlement batch or still waiting to be batched."
+      />
 
       <form
-        className="dash-form dash-form-inline"
+        className="dash-card dash-toolbar"
         onSubmit={(e) => {
           e.preventDefault();
           setApplied({ from, to });
         }}
       >
-        <label>
+        <label className="dash-field">
           From
           <input type="date" required value={from} onChange={(e) => setFrom(e.target.value)} />
         </label>
-        <label>
+        <label className="dash-field">
           To (exclusive)
           <input type="date" required value={to} onChange={(e) => setTo(e.target.value)} />
         </label>
-        <button type="submit" className="dash-button" disabled={loading}>
+        <button type="submit" className="dash-button dash-button-primary" disabled={loading}>
           {loading ? "Loading..." : "Run report"}
         </button>
       </form>
 
-      {error ? <p className="dash-error">{error}</p> : null}
+      {error ? <ErrorMessage>{error}</ErrorMessage> : null}
 
       {report ? (
-        <>
+        <div className="dash-card">
           {/* A nonzero gap is shown as a nonzero gap. This page never rounds
               it away, hides it behind a tolerance, or explains it as expected —
               the endpoint reports honestly and so does this. */}
-          <p>
-            {report.explained ? (
-              <span className="dash-badge dash-badge-ok">Reconciled — no gap</span>
-            ) : (
-              <span className="dash-badge dash-badge-gap">Gap: {bhd(report.gapFils)}</span>
-            )}
-          </p>
+          <div className={report.explained ? "dash-recon-status dash-recon-ok" : "dash-recon-status dash-recon-gap"}>
+            <span className="dash-recon-icon">{report.explained ? <IconCheck /> : <IconAlert />}</span>
+            <div>
+              <h2>
+                {report.explained ? (
+                  <span className="dash-badge dash-badge-ok">Reconciled — no gap</span>
+                ) : (
+                  <span className="dash-badge dash-badge-gap">Gap: {bhd(report.gapFils)}</span>
+                )}
+              </h2>
+              <p className="dash-muted">
+                {report.periodFrom} to {report.periodTo} (exclusive)
+              </p>
+            </div>
+          </div>
 
-          <dl className="dash-dl">
-            <dt>Period</dt>
-            <dd>
-              {report.periodFrom} to {report.periodTo} (exclusive)
-            </dd>
-            <dt>Ledger merchant payable (net)</dt>
-            <dd>{bhd(report.ledgerMerchantPayableNetFils)}</dd>
-            <dt>Settlement net payout</dt>
-            <dd>{bhd(report.settlementNetPayoutFils)}</dd>
-            <dt>Pending, not yet batched</dt>
-            <dd>{bhd(report.pendingUnbatchedFils)}</dd>
-            <dt>Gap</dt>
-            <dd>{bhd(report.gapFils)}</dd>
+          <dl className="dash-equation" aria-label="Reconciliation breakdown">
+            <div className="dash-equation-row" data-op="">
+              <dt>Ledger merchant payable (net)</dt>
+              <dd>
+                <Money fils={report.ledgerMerchantPayableNetFils} />
+              </dd>
+            </div>
+            <div className="dash-equation-row" data-op="−">
+              <dt>Settlement net payout</dt>
+              <dd>
+                <Money fils={report.settlementNetPayoutFils} />
+              </dd>
+            </div>
+            <div className="dash-equation-row" data-op="−">
+              <dt>Pending, not yet batched</dt>
+              <dd>
+                <Money fils={report.pendingUnbatchedFils} />
+              </dd>
+            </div>
+            <div
+              className={
+                report.gapFils === 0 ? "dash-equation-row is-result" : "dash-equation-row is-result is-gap"
+              }
+              data-op="="
+            >
+              <dt>Gap</dt>
+              <dd>
+                <Money fils={report.gapFils} size="lg" />
+              </dd>
+            </div>
           </dl>
 
-          <p className="dash-muted">
+          <div className="dash-card-footer">
             Gap = ledger merchant payable − settlement net payout − pending
             unbatched. A zero gap means every captured fil is accounted for in
             either a settled batch or the pending queue.
-          </p>
-        </>
+          </div>
+        </div>
       ) : null}
 
-      {loading && !report ? <p>Loading...</p> : null}
+      {loading && !report ? <Loading /> : null}
     </section>
   );
 }

@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { request } from "../../api/client.js";
 import { describeError } from "../../api/client.js";
 import { useDashboardAuth } from "../../auth/DashboardAuthContext.js";
 import { RequireRole } from "../../auth/RequireRole.js";
-import { bhd } from "../../format.js";
+import { IconAlert, IconClose, IconRefund } from "../../components/icons.js";
+import { ErrorMessage, Money } from "../../components/ui.js";
 import type { TransactionDto } from "../../types.js";
 
 interface RefundResponse {
@@ -46,6 +47,24 @@ export function RefundDrawer({ txn, onRefunded }: RefundDrawerProps) {
     setOpen(true);
   }
 
+  /** Focus handling only: the amount field takes focus when the drawer
+   *  opens, and focus goes back to the Refund button when it closes. */
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const amountRef = useRef<HTMLInputElement>(null);
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (open) {
+      amountRef.current?.focus();
+    } else if (wasOpen.current) {
+      triggerRef.current?.focus();
+    }
+    wasOpen.current = open;
+  }, [open]);
+
+  function closeDrawer(): void {
+    setOpen(false);
+  }
+
   async function handleRefund(event: React.FormEvent): Promise<void> {
     event.preventDefault();
     if (!merchantId) return;
@@ -83,40 +102,135 @@ export function RefundDrawer({ txn, onRefunded }: RefundDrawerProps) {
 
   if (!refundable) return null;
 
+  // Display only: what the submit will ask for. Blank means "everything still
+  // refundable", the API's own default, shown here with the same remaining
+  // figure the summary above it already displays.
+  const trimmedAmount = amount.trim();
+  const typedFils = Number(trimmedAmount);
+  const previewFils =
+    trimmedAmount === "" ? remainingFils : Number.isInteger(typedFils) && typedFils > 0 ? typedFils : null;
+
   return (
     <RequireRole allow={["owner", "finance"]}>
-      <div className="dash-actions">
-        {error ? <p className="dash-error">{error}</p> : null}
-        {open ? (
-          <form className="dash-form dash-form-inline" onSubmit={(e) => void handleRefund(e)}>
-            <label>
-              Amount in fils (blank refunds everything still refundable)
-              <input
-                type="number"
-                min={1}
-                step={1}
-                max={remainingFils}
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-              />
-            </label>
-            <p className="dash-muted">
-              Captured: {bhd(txn.capturedFils)} · Already refunded: {bhd(txn.refundedFils)} · Refundable:{" "}
-              {bhd(remainingFils)}
-            </p>
-            <button type="submit" className="dash-button" disabled={submitting}>
-              {submitting ? "Refunding..." : "Refund"}
-            </button>
-            <button type="button" className="dash-button" disabled={submitting} onClick={() => setOpen(false)}>
-              Cancel
-            </button>
-          </form>
-        ) : (
-          <button type="button" className="dash-button" onClick={openDrawer}>
-            Refund
-          </button>
-        )}
-      </div>
+      <button type="button" className="dash-button" onClick={openDrawer} ref={triggerRef}>
+        <IconRefund />
+        Refund
+      </button>
+      {open ? (
+        <>
+          <div
+            className="dash-drawer-overlay"
+            onClick={() => {
+              if (!submitting) closeDrawer();
+            }}
+          />
+          <aside
+            className="dash-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="refund-drawer-title"
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && !submitting) closeDrawer();
+            }}
+          >
+            <form className="dash-drawer-form" onSubmit={(e) => void handleRefund(e)}>
+              <div className="dash-drawer-header">
+                <div>
+                  <h2 id="refund-drawer-title">Refund payment</h2>
+                  <p className="dash-muted">{txn.reference ? `Reference ${txn.reference}` : "No reference"}</p>
+                </div>
+                <button
+                  type="button"
+                  className="dash-icon-button"
+                  aria-label="Close"
+                  disabled={submitting}
+                  onClick={closeDrawer}
+                >
+                  <IconClose />
+                </button>
+              </div>
+
+              <div className="dash-drawer-body">
+                <dl className="dash-summary">
+                  <div className="dash-summary-row">
+                    <dt>Captured</dt>
+                    <dd>
+                      <Money fils={txn.capturedFils} />
+                    </dd>
+                  </div>
+                  <div className="dash-summary-row">
+                    <dt>Already refunded</dt>
+                    <dd>
+                      <Money fils={txn.refundedFils} />
+                    </dd>
+                  </div>
+                  <div className="dash-summary-row is-total">
+                    <dt>Refundable</dt>
+                    <dd>
+                      <Money fils={remainingFils} />
+                    </dd>
+                  </div>
+                </dl>
+
+                <label className="dash-field">
+                  Amount in fils
+                  <span className="dash-input-affix">
+                    <input
+                      ref={amountRef}
+                      type="number"
+                      min={1}
+                      step={1}
+                      max={remainingFils}
+                      value={amount}
+                      placeholder={String(remainingFils)}
+                      onChange={(e) => setAmount(e.target.value)}
+                      aria-describedby="refund-amount-hint"
+                    />
+                    <span className="dash-input-suffix">fils</span>
+                  </span>
+                  <span className="dash-field-hint" id="refund-amount-hint">
+                    Leave blank to refund everything still refundable. 1000 fils = 1.000 BHD.
+                  </span>
+                </label>
+
+                {previewFils !== null ? (
+                  <div className="dash-preview-amount" aria-live="polite">
+                    <span className="dash-hero-label">
+                      {trimmedAmount === "" ? "Full refundable amount" : "You are refunding"}
+                    </span>
+                    <Money fils={previewFils} size="lg" />
+                  </div>
+                ) : null}
+
+                <p className="dash-info">
+                  <IconAlert />
+                  <span>The money goes back to the cardholder and cannot be recalled.</span>
+                </p>
+
+                {error ? <ErrorMessage>{error}</ErrorMessage> : null}
+              </div>
+
+              <div className="dash-drawer-footer">
+                <button
+                  type="submit"
+                  className="dash-button dash-button-danger-solid dash-button-block"
+                  disabled={submitting}
+                >
+                  {submitting ? "Refunding..." : "Refund"}
+                </button>
+                <button
+                  type="button"
+                  className="dash-button dash-button-block"
+                  disabled={submitting}
+                  onClick={closeDrawer}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </aside>
+        </>
+      ) : null}
     </RequireRole>
   );
 }

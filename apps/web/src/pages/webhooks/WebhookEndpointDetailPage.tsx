@@ -4,7 +4,9 @@ import { listDeliveries, listWebhookEndpoints, replayDelivery } from "../../api/
 import { describeError } from "../../api/client.js";
 import { useDashboardAuth } from "../../auth/DashboardAuthContext.js";
 import { Pagination } from "../../components/Pagination.js";
+import { Card, EmptyRow, ErrorMessage, Loading, PageHeader, StatusBadge, statusLabel } from "../../components/ui.js";
 import { dash, dateTime } from "../../format.js";
+import { pluralize } from "../../utils/helpers.js";
 import type { WebhookDeliveryDto, WebhookDeliveryStatus, WebhookEndpointDto } from "../../types.js";
 
 /** `webhook_deliveries.status`' four CHECK values. Note the dispatcher only
@@ -106,149 +108,170 @@ export function WebhookEndpointDetailPage() {
     }
   }
 
+  const back = { to: "/dashboard/webhooks", label: "Webhook endpoints" };
+
   if (endpointMissing) {
     return (
-      <section>
-        <h1>Endpoint not found</h1>
-        <p>
-          No webhook endpoint with this id exists on your account.{" "}
+      <section className="dash-page">
+        <PageHeader back={back} title="Endpoint not found" />
+        <div className="dash-card dash-empty">
+          <p>No webhook endpoint with this id exists on your account.</p>
           <Link to="/dashboard/webhooks">Back to webhook endpoints</Link>
-        </p>
+        </div>
       </section>
     );
   }
 
   return (
-    <section>
-      <h1>Webhook endpoint</h1>
-
-      {endpoint ? (
-        <dl className="dash-dl">
-          <dt>URL</dt>
-          <dd>{endpoint.url}</dd>
-          <dt>Secret prefix</dt>
-          <dd>
-            <code>{endpoint.secretPrefix}</code>
-          </dd>
-          <dt>Status</dt>
-          <dd>
-            <span className={`dash-status dash-status-${endpoint.status}`}>{endpoint.status}</span>
-          </dd>
-          <dt>Created at</dt>
-          <dd>{dateTime(endpoint.createdAt)}</dd>
-          <dt>Updated at</dt>
-          <dd>{dateTime(endpoint.updatedAt)}</dd>
-        </dl>
-      ) : null}
-
-      <h2>Delivery log</h2>
-
-      <fieldset className="dash-filters">
-        <legend>Status</legend>
-        {DELIVERY_STATUSES.map((status) => (
-          <label key={status}>
-            <input
-              type="checkbox"
-              checked={statuses.includes(status)}
-              onChange={() => toggleStatus(status)}
-            />
-            {status}
-          </label>
-        ))}
-      </fieldset>
-
-      {error ? <p className="dash-error">{error}</p> : null}
-
-      <table className="dash-table">
-        <thead>
-          <tr>
-            <th>Created</th>
-            <th>Event</th>
-            <th>Status</th>
-            <th>Attempts</th>
-            <th>Response</th>
-            <th>Last attempt</th>
-            <th>Next attempt</th>
-            <th>Replay of</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {deliveries.map((delivery) => {
-            // Replaying a `pending` row is pointless — it is already queued,
-            // and the dispatcher leaves a row `pending` between retries. And a
-            // replay against a disabled endpoint is rejected `409` server-side,
-            // so the button is hidden rather than offered and refused, since
-            // the endpoint's own state is already known on this page.
-            const replayable =
-              (delivery.status === "succeeded" || delivery.status === "exhausted") &&
-              endpoint?.status === "active";
-            return (
-              <tr key={delivery.id}>
-                <td>{dateTime(delivery.createdAt)}</td>
-                <td>{delivery.eventType}</td>
-                <td>
-                  <span className={`dash-status dash-status-${delivery.status}`}>
-                    {delivery.status}
-                  </span>
-                </td>
-                <td>{delivery.attemptCount}</td>
-                <td>
-                  {dash(delivery.responseStatusCode)}
-                  {delivery.responseBodyExcerpt ? (
-                    <details>
-                      <summary>body</summary>
-                      <pre className="dash-pre">{delivery.responseBodyExcerpt}</pre>
-                    </details>
-                  ) : null}
-                </td>
-                <td>{dateTime(delivery.lastAttemptedAt)}</td>
-                <td>{dateTime(delivery.nextAttemptAt)}</td>
-                <td>
-                  {delivery.replayOfDeliveryId ? (
-                    <span className="dash-muted">
-                      replay of <code>{delivery.replayOfDeliveryId}</code>
-                    </span>
-                  ) : (
-                    "—"
-                  )}
-                </td>
-                <td>
-                  {replayable ? (
-                    <button
-                      type="button"
-                      className="dash-button"
-                      disabled={busyId === delivery.id}
-                      onClick={() => void handleReplay(delivery)}
-                    >
-                      Replay
-                    </button>
-                  ) : (
-                    "—"
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-          {deliveries.length === 0 && !loading && !error ? (
-            <tr>
-              <td colSpan={9}>No deliveries match these filters.</td>
-            </tr>
-          ) : null}
-        </tbody>
-      </table>
-
-      {loading ? <p>Loading...</p> : null}
-
-      <Pagination
-        nextCursor={nextCursor}
-        loading={loading}
-        onLoadMore={() => void loadDeliveries(nextCursor)}
+    <section className="dash-page">
+      <PageHeader
+        back={back}
+        title="Webhook endpoint"
+        badge={endpoint ? <StatusBadge status={endpoint.status} /> : null}
       />
 
-      <p>
-        <Link to="/dashboard/webhooks">Back to webhook endpoints</Link>
-      </p>
+      {endpoint ? (
+        <div className="dash-card">
+          <div className="dash-figures">
+            <div className="dash-figure">
+              <span className="dash-figure-label">URL</span>
+              <span className="dash-figure-value dash-cell-url">{endpoint.url}</span>
+            </div>
+            <div className="dash-figure">
+              <span className="dash-figure-label">Secret prefix</span>
+              <span className="dash-figure-value">
+                <code>{endpoint.secretPrefix}</code>
+              </span>
+            </div>
+            <div className="dash-figure">
+              <span className="dash-figure-label">Status</span>
+              <span className="dash-figure-value">
+                <StatusBadge status={endpoint.status} />
+              </span>
+            </div>
+            <div className="dash-figure">
+              <span className="dash-figure-label">Created at</span>
+              <span className="dash-figure-value">{dateTime(endpoint.createdAt)}</span>
+            </div>
+            <div className="dash-figure">
+              <span className="dash-figure-label">Updated at</span>
+              <span className="dash-figure-value">{dateTime(endpoint.updatedAt)}</span>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {error ? <ErrorMessage>{error}</ErrorMessage> : null}
+
+      <Card title="Delivery log" labelledBy="delivery-log-title">
+        <div className="dash-filters-bar">
+          <fieldset className="dash-filters">
+            <legend>Status</legend>
+            {DELIVERY_STATUSES.map((status) => (
+              <label key={status} className="dash-chip">
+                <input
+                  type="checkbox"
+                  checked={statuses.includes(status)}
+                  onChange={() => toggleStatus(status)}
+                />
+                {statusLabel(status)}
+              </label>
+            ))}
+          </fieldset>
+        </div>
+
+        <div className="dash-table-wrap">
+          <table className="dash-table">
+            <thead>
+              <tr>
+                <th>Created</th>
+                <th>Event</th>
+                <th>Status</th>
+                <th className="dash-num">Attempts</th>
+                <th>Response</th>
+                <th>Last attempt</th>
+                <th>Next attempt</th>
+                <th>Replay of</th>
+                <th className="dash-num">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {deliveries.map((delivery) => {
+                // Replaying a `pending` row is pointless — it is already queued,
+                // and the dispatcher leaves a row `pending` between retries. And a
+                // replay against a disabled endpoint is rejected `409` server-side,
+                // so the button is hidden rather than offered and refused, since
+                // the endpoint's own state is already known on this page.
+                const replayable =
+                  (delivery.status === "succeeded" || delivery.status === "exhausted") &&
+                  endpoint?.status === "active";
+                return (
+                  <tr key={delivery.id}>
+                    <td className="dash-nowrap">{dateTime(delivery.createdAt)}</td>
+                    <td>
+                      <code>{delivery.eventType}</code>
+                    </td>
+                    <td>
+                      <StatusBadge status={delivery.status} />
+                    </td>
+                    <td className="dash-num">{delivery.attemptCount}</td>
+                    <td>
+                      {dash(delivery.responseStatusCode)}
+                      {delivery.responseBodyExcerpt ? (
+                        <details>
+                          <summary>body</summary>
+                          <pre className="dash-pre">{delivery.responseBodyExcerpt}</pre>
+                        </details>
+                      ) : null}
+                    </td>
+                    <td className="dash-nowrap">{dateTime(delivery.lastAttemptedAt)}</td>
+                    <td className="dash-nowrap">{dateTime(delivery.nextAttemptAt)}</td>
+                    <td>
+                      {delivery.replayOfDeliveryId ? (
+                        <span className="dash-muted">
+                          replay of <code>{delivery.replayOfDeliveryId}</code>
+                        </span>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td className="dash-num">
+                      {replayable ? (
+                        <button
+                          type="button"
+                          className="dash-button dash-button-sm"
+                          disabled={busyId === delivery.id}
+                          onClick={() => void handleReplay(delivery)}
+                        >
+                          Replay
+                        </button>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {deliveries.length === 0 && !loading && !error ? (
+                <EmptyRow colSpan={9}>No deliveries match these filters.</EmptyRow>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+
+        {loading ? <Loading /> : null}
+
+        {nextCursor ? (
+          <div className="dash-list-footer">
+            <span>{pluralize(deliveries.length, "delivery", "deliveries")} loaded</span>
+            <Pagination
+              nextCursor={nextCursor}
+              loading={loading}
+              onLoadMore={() => void loadDeliveries(nextCursor)}
+            />
+          </div>
+        ) : null}
+      </Card>
     </section>
   );
 }

@@ -5,7 +5,10 @@ import { describeError } from "../../api/client.js";
 import { useDashboardAuth } from "../../auth/DashboardAuthContext.js";
 import { RequireRole } from "../../auth/RequireRole.js";
 import { Pagination } from "../../components/Pagination.js";
-import { bhd, dash, dateTime } from "../../format.js";
+import { IconPlus } from "../../components/icons.js";
+import { EmptyRow, ErrorMessage, Loading, Money, PageHeader, StatusBadge, statusLabel } from "../../components/ui.js";
+import { dash, dateTime } from "../../format.js";
+import { pluralize } from "../../utils/helpers.js";
 import type { PaymentLinkDto, PaymentLinkStatus } from "../../types.js";
 
 /** The four *stored* statuses, including `reserved` — the merchant-facing
@@ -63,72 +66,86 @@ export function PaymentLinkListPage() {
   }
 
   return (
-    <section>
-      <h1>Payment links</h1>
+    <section className="dash-page">
+      <PageHeader
+        title="Payment links"
+        description="Shareable checkout links for a fixed amount. Each link can be paid once."
+        actions={
+          <RequireRole allow={["owner", "finance"]}>
+            <Link className="dash-button-link" to="/dashboard/payment-links/new">
+              <IconPlus />
+              New payment link
+            </Link>
+          </RequireRole>
+        }
+      />
 
-      <RequireRole allow={["owner", "finance"]}>
-        <p>
-          <Link className="dash-button-link" to="/dashboard/payment-links/new">
-            New payment link
-          </Link>
-        </p>
-      </RequireRole>
+      {error ? <ErrorMessage>{error}</ErrorMessage> : null}
 
-      <fieldset className="dash-filters">
-        <legend>Status</legend>
-        {STATUSES.map((status) => (
-          <label key={status}>
-            <input
-              type="checkbox"
-              checked={statuses.includes(status)}
-              onChange={() => toggleStatus(status)}
-            />
-            {status}
-          </label>
-        ))}
-      </fieldset>
+      <div className="dash-card">
+        <div className="dash-filters-bar">
+          <fieldset className="dash-filters">
+            <legend>Status</legend>
+            {STATUSES.map((status) => (
+              <label key={status} className="dash-chip">
+                <input
+                  type="checkbox"
+                  checked={statuses.includes(status)}
+                  onChange={() => toggleStatus(status)}
+                />
+                {statusLabel(status)}
+              </label>
+            ))}
+          </fieldset>
+        </div>
 
-      {error ? <p className="dash-error">{error}</p> : null}
+        <div className="dash-table-wrap">
+          <table className="dash-table">
+            <thead>
+              <tr>
+                <th>Reference</th>
+                <th>Description</th>
+                <th className="dash-num">Amount</th>
+                <th>Status</th>
+                <th>Expires</th>
+                <th>Paid</th>
+                <th>Canceled</th>
+              </tr>
+            </thead>
+            <tbody>
+              {links.map((link) => (
+                <tr key={link.id}>
+                  <td>
+                    <Link to={`/dashboard/payment-links/${link.id}`}>{dash(link.reference)}</Link>
+                  </td>
+                  <td>{dash(link.description)}</td>
+                  <td className="dash-num dash-cell-strong">
+                    <Money fils={link.amountFils} />
+                  </td>
+                  <td>
+                    <StatusBadge status={link.status} />
+                  </td>
+                  <td className="dash-nowrap">{dateTime(link.expiresAt)}</td>
+                  <td className="dash-nowrap">{dateTime(link.paidAt)}</td>
+                  <td className="dash-nowrap">{dateTime(link.canceledAt)}</td>
+                </tr>
+              ))}
+              {links.length === 0 && !loading ? (
+                <EmptyRow colSpan={7}>No payment links match these filters.</EmptyRow>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
 
-      <table className="dash-table">
-        <thead>
-          <tr>
-            <th>Reference</th>
-            <th>Description</th>
-            <th>Amount</th>
-            <th>Status</th>
-            <th>Expires</th>
-            <th>Paid</th>
-            <th>Canceled</th>
-          </tr>
-        </thead>
-        <tbody>
-          {links.map((link) => (
-            <tr key={link.id}>
-              <td>
-                <Link to={`/dashboard/payment-links/${link.id}`}>{dash(link.reference)}</Link>
-              </td>
-              <td>{dash(link.description)}</td>
-              <td>{bhd(link.amountFils)}</td>
-              <td>
-                <span className={`dash-status dash-status-${link.status}`}>{link.status}</span>
-              </td>
-              <td>{dateTime(link.expiresAt)}</td>
-              <td>{dateTime(link.paidAt)}</td>
-              <td>{dateTime(link.canceledAt)}</td>
-            </tr>
-          ))}
-          {links.length === 0 && !loading ? (
-            <tr>
-              <td colSpan={7}>No payment links match these filters.</td>
-            </tr>
-          ) : null}
-        </tbody>
-      </table>
+        {loading ? <Loading /> : null}
 
-      {loading ? <p>Loading...</p> : null}
-
-      <Pagination nextCursor={nextCursor} loading={loading} onLoadMore={() => void load(nextCursor)} />
+        {nextCursor ? (
+          <div className="dash-list-footer">
+            <span>{pluralize(links.length, "link")} loaded</span>
+            <Pagination nextCursor={nextCursor} loading={loading} onLoadMore={() => void load(nextCursor)} />
+          </div>
+        ) : null}
+      </div>
     </section>
   );
 }

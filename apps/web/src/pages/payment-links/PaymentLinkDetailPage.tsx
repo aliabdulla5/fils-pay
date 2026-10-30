@@ -4,7 +4,9 @@ import { cancelPaymentLink, listPaymentLinks } from "../../api/paymentLinks.js";
 import { describeError } from "../../api/client.js";
 import { useDashboardAuth } from "../../auth/DashboardAuthContext.js";
 import { RequireRole } from "../../auth/RequireRole.js";
-import { bhd, dash, dateTime } from "../../format.js";
+import { IconCheck, IconCopy, IconExternal } from "../../components/icons.js";
+import { Card, ErrorMessage, Loading, Money, PageHeader, StatusBadge } from "../../components/ui.js";
+import { dash, dateTime } from "../../format.js";
 import type { PaymentLinkDto } from "../../types.js";
 
 /** The list endpoint's own maximum page size. */
@@ -83,23 +85,25 @@ export function PaymentLinkDetailPage() {
     }
   }
 
-  if (state.kind === "loading") return <p>Loading...</p>;
+  const back = { to: "/dashboard/payment-links", label: "Payment links" };
+
+  if (state.kind === "loading") return <Loading />;
   if (state.kind === "error") {
     return (
-      <section>
-        <h1>Payment link</h1>
-        <p className="dash-error">{state.message}</p>
+      <section className="dash-page">
+        <PageHeader back={back} title="Payment link" />
+        <ErrorMessage>{state.message}</ErrorMessage>
       </section>
     );
   }
   if (state.kind === "not_found") {
     return (
-      <section>
-        <h1>Payment link not found</h1>
-        <p>
-          This link is not among your {LOOKUP_LIMIT} most recent payment links.{" "}
+      <section className="dash-page">
+        <PageHeader back={back} title="Payment link not found" />
+        <div className="dash-card dash-empty">
+          <p>This link is not among your {LOOKUP_LIMIT} most recent payment links.</p>
           <Link to="/dashboard/payment-links">Back to payment links</Link>
-        </p>
+        </div>
       </section>
     );
   }
@@ -107,74 +111,97 @@ export function PaymentLinkDetailPage() {
   const { link } = state;
 
   return (
-    <section>
-      <h1>Payment link</h1>
-      <p className="dash-muted">
-        <code>{link.id}</code>
-      </p>
+    <section className="dash-page">
+      <PageHeader
+        back={back}
+        title={link.reference ?? "Payment link"}
+        badge={<StatusBadge status={link.status} />}
+        description={<code>{link.id}</code>}
+        actions={
+          link.status === "active" ? (
+            <RequireRole allow={["owner", "finance"]}>
+              <button
+                type="button"
+                className="dash-button dash-button-danger"
+                disabled={submitting}
+                onClick={() => void handleCancel()}
+              >
+                {submitting ? "Canceling..." : "Cancel payment link"}
+              </button>
+            </RequireRole>
+          ) : null
+        }
+      />
 
-      <dl className="dash-dl">
-        <dt>Amount</dt>
-        <dd>{bhd(link.amountFils)}</dd>
-        <dt>Currency</dt>
-        <dd>{link.currency}</dd>
-        <dt>Status</dt>
-        <dd>
-          <span className={`dash-status dash-status-${link.status}`}>{link.status}</span>
-        </dd>
-        <dt>Reference</dt>
-        <dd>{dash(link.reference)}</dd>
-        <dt>Description</dt>
-        <dd>{dash(link.description)}</dd>
-        <dt>Expires at</dt>
-        <dd>{dateTime(link.expiresAt)}</dd>
-        <dt>Created at</dt>
-        <dd>{dateTime(link.createdAt)}</dd>
-        <dt>Paid at</dt>
-        <dd>{dateTime(link.paidAt)}</dd>
-        <dt>Canceled at</dt>
-        <dd>{dateTime(link.canceledAt)}</dd>
-        <dt>Transaction</dt>
-        <dd>
-          {link.transactionId ? (
-            <Link to={`/dashboard/transactions/${link.transactionId}`}>
-              <code>{link.transactionId}</code>
-            </Link>
-          ) : (
-            "—"
-          )}
-        </dd>
-        <dt>Checkout link</dt>
-        <dd>
-          {/* Linked to, never duplicated — /pay/:token is the one checkout
-              implementation, and there is no preview of it embedded here. */}
-          <a href={link.url} target="_blank" rel="noreferrer">
-            {link.url}
-          </a>{" "}
-          <button type="button" className="dash-button" onClick={() => void handleCopy(link.url)}>
-            {copied ? "Copied" : "Copy link"}
-          </button>
-        </dd>
-      </dl>
+      {actionError ? <ErrorMessage>{actionError}</ErrorMessage> : null}
 
-      {actionError ? <p className="dash-error">{actionError}</p> : null}
+      <div className="dash-grid-detail">
+        <div className="dash-stack">
+          <div className="dash-card">
+            <div className="dash-hero">
+              <div>
+                <span className="dash-hero-label">Amount</span>
+                <Money fils={link.amountFils} size="xl" />
+              </div>
+            </div>
+            <div className="dash-card-body">
+              <span className="dash-hero-label">Checkout link</span>
+              <div className="dash-copy-field">
+                <span className="dash-copy-value">
+                  {/* Linked to, never duplicated — /pay/:token is the one checkout
+                      implementation, and there is no preview of it embedded here. */}
+                  <a href={link.url} target="_blank" rel="noreferrer">
+                    {link.url}
+                  </a>
+                </span>
+                <button type="button" className="dash-button" onClick={() => void handleCopy(link.url)}>
+                  {copied ? <IconCheck /> : <IconCopy />}
+                  {copied ? "Copied" : "Copy link"}
+                </button>
+                <a className="dash-button" href={link.url} target="_blank" rel="noreferrer">
+                  <IconExternal />
+                  Open
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
 
-      {link.status === "active" ? (
-        <RequireRole allow={["owner", "finance"]}>
-          <button
-            type="button"
-            className="dash-button"
-            disabled={submitting}
-            onClick={() => void handleCancel()}
-          >
-            {submitting ? "Canceling..." : "Cancel payment link"}
-          </button>
-        </RequireRole>
-      ) : null}
-
-      <p>
-        <Link to="/dashboard/payment-links">Back to payment links</Link>
-      </p>
+        <Card title="Details" labelledBy="link-details-title">
+          <div className="dash-card-body">
+            <dl className="dash-dl dash-dl-stacked">
+              <dt>Status</dt>
+              <dd>
+                <StatusBadge status={link.status} />
+              </dd>
+              <dt>Currency</dt>
+              <dd>{link.currency}</dd>
+              <dt>Reference</dt>
+              <dd>{dash(link.reference)}</dd>
+              <dt>Description</dt>
+              <dd>{dash(link.description)}</dd>
+              <dt>Expires at</dt>
+              <dd>{dateTime(link.expiresAt)}</dd>
+              <dt>Created at</dt>
+              <dd>{dateTime(link.createdAt)}</dd>
+              <dt>Paid at</dt>
+              <dd>{dateTime(link.paidAt)}</dd>
+              <dt>Canceled at</dt>
+              <dd>{dateTime(link.canceledAt)}</dd>
+              <dt>Transaction</dt>
+              <dd>
+                {link.transactionId ? (
+                  <Link to={`/dashboard/transactions/${link.transactionId}`}>
+                    <code>{link.transactionId}</code>
+                  </Link>
+                ) : (
+                  "—"
+                )}
+              </dd>
+            </dl>
+          </div>
+        </Card>
+      </div>
     </section>
   );
 }

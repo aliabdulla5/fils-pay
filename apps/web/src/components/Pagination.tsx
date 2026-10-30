@@ -19,7 +19,7 @@ export function Pagination({
 }) {
   if (!nextCursor) return null;
   return (
-    <button type="button" className="dash-button" onClick={onLoadMore} disabled={loading}>
+    <button type="button" className="dash-button dash-button-sm" onClick={onLoadMore} disabled={loading}>
       {loading ? "Loading..." : "Load more"}
     </button>
   );

@@ -3,6 +3,8 @@ import { Link, useNavigate } from "react-router-dom";
 import { createWebhookEndpoint } from "../../api/webhooks.js";
 import { describeError } from "../../api/client.js";
 import { useDashboardAuth } from "../../auth/DashboardAuthContext.js";
+import { IconAlert, IconCheck, IconCopy } from "../../components/icons.js";
+import { Card, ErrorMessage, PageHeader, StatusBadge, statusLabel } from "../../components/ui.js";
 import { dateTime } from "../../format.js";
 import type { WebhookEndpointCreateResponse } from "../../types.js";
 
@@ -54,76 +56,104 @@ export function WebhookEndpointCreatePage() {
 
   if (created) {
     return (
-      <section>
-        <h1>Endpoint created</h1>
+      <section className="dash-page">
+        <PageHeader title="Endpoint created" badge={<StatusBadge status={created.status} />} />
 
-        <div className="dash-confirm">
-          <h2>Signing secret — shown once</h2>
+        <div className="dash-confirm" role="alert">
+          <h2>
+            <IconAlert />
+            Signing secret — shown once
+          </h2>
           <p>
             <strong>This will not be shown again.</strong> Store it now; every delivery
             to this endpoint is signed with it, and it cannot be re-read or recovered.
           </p>
-          <p>
-            <code className="dash-secret">{created.secret}</code>{" "}
+          <code className="dash-secret">{created.secret}</code>
+          <div className="dash-actions">
             <button
               type="button"
               className="dash-button"
               onClick={() => void handleCopy(created.secret)}
             >
+              {copied ? <IconCheck /> : <IconCopy />}
               {copied ? "Copied" : "Copy secret"}
             </button>
-          </p>
+          </div>
         </div>
 
-        <dl className="dash-dl">
-          <dt>URL</dt>
-          <dd>{created.url}</dd>
-          <dt>Secret prefix</dt>
-          <dd>
-            <code>{created.secretPrefix}</code>
-          </dd>
-          <dt>Status</dt>
-          <dd>{created.status}</dd>
-          <dt>Created at</dt>
-          <dd>{dateTime(created.createdAt)}</dd>
-        </dl>
+        <Card title="Endpoint" labelledBy="created-endpoint-title">
+          <div className="dash-card-body">
+            <dl className="dash-dl">
+              <dt>URL</dt>
+              <dd>{created.url}</dd>
+              <dt>Secret prefix</dt>
+              <dd>
+                <code>{created.secretPrefix}</code>
+              </dd>
+              <dt>Status</dt>
+              <dd>{statusLabel(created.status)}</dd>
+              <dt>Created at</dt>
+              <dd>{dateTime(created.createdAt)}</dd>
+            </dl>
+          </div>
+        </Card>
 
-        <button
-          type="button"
-          className="dash-button"
-          onClick={() => navigate(`/dashboard/webhooks/${created.id}`, { replace: true })}
-        >
-          I&apos;ve saved it — continue
-        </button>
+        <div className="dash-actions">
+          <button
+            type="button"
+            className="dash-button dash-button-primary"
+            onClick={() => navigate(`/dashboard/webhooks/${created.id}`, { replace: true })}
+          >
+            I&apos;ve saved it — continue
+          </button>
+        </div>
       </section>
     );
   }
 
   return (
-    <section>
-      <h1>New webhook endpoint</h1>
+    <section className="dash-page">
+      <PageHeader
+        back={{ to: "/dashboard/webhooks", label: "Webhook endpoints" }}
+        title="New webhook endpoint"
+        description="FilsPay will POST signed event notifications to this URL."
+      />
 
-      {error ? <p className="dash-error">{error}</p> : null}
+      {error ? <ErrorMessage>{error}</ErrorMessage> : null}
 
-      <form className="dash-form" onSubmit={(e) => void handleSubmit(e)}>
-        <label>
-          Endpoint URL
-          <input
-            type="url"
-            required
-            placeholder="https://example.com/filspay/webhooks"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-          />
-        </label>
-        <button type="submit" className="dash-button" disabled={submitting}>
-          {submitting ? "Creating..." : "Create endpoint"}
-        </button>
-      </form>
+      <div className="dash-grid-detail">
+        <Card title="Endpoint" labelledBy="new-endpoint-title">
+          <form className="dash-card-body dash-form" onSubmit={(e) => void handleSubmit(e)}>
+            <label className="dash-field">
+              Endpoint URL
+              <input
+                type="url"
+                required
+                placeholder="https://example.com/filspay/webhooks"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+              />
+            </label>
+            <div className="dash-actions">
+              <button type="submit" className="dash-button dash-button-primary" disabled={submitting}>
+                {submitting ? "Creating..." : "Create endpoint"}
+              </button>
+              <Link className="dash-button" to="/dashboard/webhooks">
+                Cancel
+              </Link>
+            </div>
+          </form>
+        </Card>
 
-      <p>
-        <Link to="/dashboard/webhooks">Back to webhook endpoints</Link>
-      </p>
+        <Card title="Before you continue" labelledBy="endpoint-help-title">
+          <div className="dash-card-body">
+            <p className="dash-muted">
+              The signing secret is shown once, right after the endpoint is created. Have
+              somewhere safe ready to store it — it cannot be shown again or recovered.
+            </p>
+          </div>
+        </Card>
+      </div>
     </section>
   );
 }

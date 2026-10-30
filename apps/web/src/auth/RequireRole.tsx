@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { ErrorMessage, PageHeader } from "../components/ui.js";
 import { useDashboardAuth } from "./DashboardAuthContext.js";
 import type { MerchantRole } from "../types.js";
 
@@ -62,12 +63,12 @@ export function RoleGatedPage({
     <RequireRole
       allow={allow}
       fallback={
-        <section>
-          <h1>{title}</h1>
-          <p className="dash-error">
+        <section className="dash-page">
+          <PageHeader title={title} />
+          <ErrorMessage>
             You don&apos;t have permission to use this page — ask an owner or finance
             user on your account.
-          </p>
+          </ErrorMessage>
         </section>
       }
     >
