@@ -1,30 +1,40 @@
 import type { Config } from "../config.js";
+import { deliverOtpEmail } from "./email.js";
 
-/**
- * OTP delivery stub. No real email/SMS integration exists or is needed at
- * this stage. Always logs a structured line; only includes the raw code in
- * the log when `config.nodeEnv !== 'production'` — production never logs
- * the code itself.
- */
-/** Subset of the Fastify logger, so tests can pass a stub. */
+/** Subset of the Fastify logger, so callers can pass a stub. */
 export interface MinimalLogger {
   info: (obj: Record<string, unknown>, msg: string) => void;
 }
 
-// logs the otp in plaintext when not production. our staging has NODE_ENV unset btw — am
-// YA: staging gets NODE_ENV=production from ops/.env.docker. fine
-export function sendOtpCode(
+export async function sendOtpCode(
   logger: MinimalLogger,
-  config: Pick<Config, "nodeEnv">,
+  config: Pick<
+    Config,
+    | "nodeEnv"
+    | "otpTtlMinutes"
+    | "otpSmtpHost"
+    | "otpSmtpPort"
+    | "otpSmtpSecure"
+    | "otpSmtpUser"
+    | "otpSmtpPassword"
+    | "otpFromEmail"
+    | "otpFromName"
+  >,
   recipient: { merchantUserId: string; email: string },
   code: string,
-): void {
-  if (config.nodeEnv === "production") {
-    logger.info({ merchantUserId: recipient.merchantUserId, channel: "otp" }, "otp code generated");
-  } else {
-    logger.info(
-      { merchantUserId: recipient.merchantUserId, channel: "otp", code },
-      "otp code generated (dev)",
-    );
+): Promise<void> {
+  const mailConfigured = Boolean(config.otpSmtpHost && config.otpFromEmail);
+  if (mailConfigured) {
+    await deliverOtpEmail(config, recipient.email, code, config.otpTtlMinutes, "merchant");
+    logger.info({ merchantUserId: recipient.merchantUserId, channel: "otp" }, "otp email sent");
+    return;
   }
+
+  if (config.nodeEnv === "production") {
+    throw new Error("OTP email is not configured");
+  }
+  logger.info(
+    { merchantUserId: recipient.merchantUserId, channel: "otp", code },
+    "otp code generated (dev)",
+  );
 }

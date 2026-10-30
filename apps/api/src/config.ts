@@ -17,12 +17,30 @@ export interface Config {
   pgPoolIdleTimeoutMs: number;
   pgPoolConnectionTimeoutMs: number;
 
+  /** Fastify/pino log level. Per-request "info" lines are a measurable cost
+   *  on a 0.5 vCPU container under load; production can set "warn". */
+  logLevel: string;
+  /** Requests allowed in flight at once before new ones are refused with
+   *  503 + Retry-After (plugins/overload.ts). 0 disables the cap. */
+  maxInflightRequests: number;
+
   sessionTtlHours: number;
   pendingSessionTtlMinutes: number;
   otpTtlMinutes: number;
   otpCodeLength: number;
   otpMaxAttempts: number;
   otpDevExpose: boolean;
+
+  /** Optional SMTP settings for OTP email. If absent, development logs a
+   *  code for local use; production rejects login instead of silently
+   *  treating a log line as delivery. */
+  otpSmtpHost: string;
+  otpSmtpPort: number;
+  otpSmtpSecure: boolean;
+  otpSmtpUser: string;
+  otpSmtpPassword: string;
+  otpFromEmail: string;
+  otpFromName: string;
 
   argon2MemoryKib: number;
   argon2TimeCost: number;
@@ -205,14 +223,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     pgPoolIdleTimeoutMs: parseIntEnv(env.PG_POOL_IDLE_TIMEOUT_MS, 30_000),
     pgPoolConnectionTimeoutMs: parseIntEnv(env.PG_POOL_CONNECTION_TIMEOUT_MS, 5_000),
 
-    // Merchant session lifetime (absolute, from OTP verification): 48 h =
-    // 172,800 s. See docs/authentication/SESSION_POLICY.md.
-    sessionTtlHours: parseIntEnv(env.SESSION_TTL_HOURS, 48),
+    logLevel: env.LOG_LEVEL ?? "info",
+    maxInflightRequests: parseIntEnv(env.MAX_INFLIGHT_REQUESTS, 0),
+
+    sessionTtlHours: parseIntEnv(env.SESSION_TTL_HOURS, 12),
     pendingSessionTtlMinutes: parseIntEnv(env.PENDING_SESSION_TTL_MINUTES, 10),
     otpTtlMinutes: parseIntEnv(env.OTP_TTL_MINUTES, 5),
     otpCodeLength: parseIntEnv(env.OTP_CODE_LENGTH, 6),
     otpMaxAttempts: parseIntEnv(env.OTP_MAX_ATTEMPTS, 5),
-    otpDevExpose: parseBoolEnv(env.OTP_DEV_EXPOSE, nodeEnv !== "production"),
+    otpDevExpose: nodeEnv !== "production" && parseBoolEnv(env.OTP_DEV_EXPOSE, true),
+    otpSmtpHost: env.OTP_SMTP_HOST ?? "",
+    otpSmtpPort: parseIntEnv(env.OTP_SMTP_PORT, 587),
+    otpSmtpSecure: parseBoolEnv(env.OTP_SMTP_SECURE, env.OTP_SMTP_PORT === "465"),
+    otpSmtpUser: env.OTP_SMTP_USER ?? "",
+    otpSmtpPassword: env.OTP_SMTP_PASSWORD ?? "",
+    otpFromEmail: env.OTP_FROM_EMAIL ?? "",
+    otpFromName: env.OTP_FROM_NAME ?? "FilsPay",
 
     argon2MemoryKib: parseIntEnv(env.ARGON2_MEMORY_KIB, 19_456),
     argon2TimeCost: parseIntEnv(env.ARGON2_TIME_COST, 2),

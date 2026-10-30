@@ -4,6 +4,7 @@ import type { Config } from "./config.js";
 import { createAcquirerSimulator } from "./acquirer/simulator.js";
 import { cookiesPlugin } from "./plugins/cookies.js";
 import { multipartPlugin } from "./plugins/multipart.js";
+import { overloadPlugin } from "./plugins/overload.js";
 import { errorHandler } from "./plugins/errorHandler.js";
 import { healthRoutes } from "./routes/health.js";
 import { authRoutes } from "./routes/auth.js";
@@ -39,13 +40,14 @@ export interface BuildAppOptions {
  * tests use `app.inject(...)` against this — no real socket needed.
  */
 export function buildApp(config: Config, pool: Pool, options: BuildAppOptions = {}): FastifyInstance {
-  const app = Fastify({ logger: true });
+  const app = Fastify({ logger: { level: config.logLevel } });
 
   app.decorate("db", pool);
   app.decorate("config", config);
   app.decorate("acquirer", createAcquirerSimulator(config));
   app.decorate("webhookTransport", options.webhookTransport ?? createFetchTransport());
 
+  app.register(overloadPlugin, { maxInflightRequests: config.maxInflightRequests });
   app.register(cookiesPlugin);
   app.register(multipartPlugin, { config });
   app.setErrorHandler(errorHandler);

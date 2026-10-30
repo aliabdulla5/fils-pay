@@ -1,83 +1,75 @@
-# AI agent conventions — FilsPay
+# Agent instructions — FilsPay
 
-Guidelines for automated coding agents (Cursor, Copilot, Claude, Cody, etc.)
-working in this repository. Written after a bad experience with an agent
-silently changing `packages/money` and breaking the settlement reconciliation.
-— MK, August 2026
+Shared by every coding agent the team uses: Codex reads this file directly,
+Claude Code reaches it through `CLAUDE.md`, Gemini CLI through `GEMINI.md`.
+Team Caramel Popcorn, October 2026.
 
----
+This file replaces earlier agent files that stated wrong facts ("amounts are
+cents", "settlement windows are UTC", "docs always beat code"). Agents that
+followed them reintroduced fixed bugs. When anything here, in a comment, or in
+an old note disagrees with the ADRs, **the ADRs win**.
 
-## Before you start
+## Read before changing anything
 
-1. Read `docs/ARCHITECTURE.md` in full — it describes the intended design.
-2. Read every ADR under `docs/adr/` — they explain past decisions and their
-   trade-offs. Many things that look like bugs are documented design choices.
-3. Read `docs/HANDOVER.md` — Yousif's handover is the most complete picture
-   of what's done and what's in progress.
-4. Read `CHANGELOG.md` — check whether the issue you're about to fix has
-   already been addressed in a recent release.
+1. `docs/ARCHITECTURE.md`
+2. Every ADR in `docs/adr/` (0007 and 0008 supersede 0003 and 0004)
+3. `docs/HANDOVER.md`, `CHANGELOG.md`
+4. `docs/BUG_INVENTORY.md`: what is fixed, what is open and why, what is intentional
 
-## Rules
+## Facts that are easy to get wrong
 
-### Do not modify
+- **Money is integer fils: 1 BD = 1000 fils** (ADR-0001). Columns end in
+  `_fils` and are BIGINT. Parse text amounts with `parseBhdToFils` only; never
+  `parseFloat`, never "× 100". `toFixed(2)` is never correct for BD.
+- **Settlement business day = Asia/Bahrain** (UTC+3, no DST), midnight to
+  midnight. Month windows compared with batches use the Bahrain month (ADR-0007).
+- **Discounts reduce the amount the MDR is charged on**, not the fee after it
+  (`ComputeSettlementFee`, discounted_fee.go).
+- **The balance cache is rebuilt from the ledger**, by every path (ADR-0008).
+- Payment links: the server clock decides expiry; a link is paid at most once.
 
-- `packages/money/` — Frozen after Q2 audit. Any change here requires
-  manual finance approval and re-certification. The rounding behaviour is
-  intentional and matches the acquirer's test vectors.
-- `apps/settlement/internal/money/` — Go mirror of `packages/money`. Same
-  freeze applies.
-- Test files (`*.test.ts`, `*_test.go`) — Tests are regression-locked.
-  They assert current correct behavior. If a test fails after your change,
-  your change is wrong, not the test.
+## Do not change without a human's sign-off
 
-### Settlement
+- `packages/money/` and `apps/settlement/internal/money/` (audited, frozen)
+- Test files (`*.test.ts`, `*_test.go`). They are regression-locked.
+- The v1 partner API's 501 stubs; `refund.succeeded` stays out of
+  `WEBHOOK_ELIGIBLE_EVENT_TYPES` until refund webhooks ship
+- `Math.random()` for OTPs, invite codes and link slugs, and the display-name
+  comparison in `creditApproval.ts`: both documented decisions, both on the
+  open-risk list
+- Widening money columns or `platform_stats.total_processed_fils`: needs an
+  approved migration plan
+- Migrations that have already run anywhere: add a new numbered migration instead
 
-- The Go settlement tests are flaky on Windows (timezone-dependent
-  filesystem timestamps). If you're on Windows, run them with
-  `go test -short ./...` to skip the slow integration tests.
-- Settlement date windows are UTC-based. The `Asia/Bahrain` constant in
-  `window.go` is for log formatting only.
+## Known locked tests that fail on purpose
 
-### Parsing
+These assert behaviour that was a defect. **A failing one is not a reason to
+change code back.** Never "fix" a test by reverting a bug fix.
 
-- Use `parseBhdToFils` from `packages/money` for **all** amount parsing.
-  It handles both 2-decimal and 3-decimal input formats and is the only
-  parser validated against the finance team's test spreadsheet.
-- Do not write your own parsing logic or use `parseFloat` directly.
+- `adjustmentImport.test.ts` (3) and `adminAdjustmentImport.test.ts` (1):
+  expect "4.75" BD to post 475 fils (the 10x import bug)
+- `discountAdjustment.test.ts`: expects the discount off the fee
+- `currentFeeScheduleDisplay.test.ts`: expects the latest-entered rate, not
+  the rate in effect
+- `dispatcher.test.ts` backoff: expects an exact delay from a jittered function
+- `scripts/reconcile_march.test.ts`: expects the UTC month
+- `apps/settlement/internal/ledger/refresh_test.go` (2): expect the balance
+  from scheme export lines (FP-203)
+- Reporting tests fail only when run after the API suite in one database
+  (leftover outbox rows); they pass on their own database.
 
-### API
+## Working rules
 
-- The `v1/` prefix in route files is the current live partner API. Some
-  endpoints return 501 — these are stubs reserved for upcoming features
-  and must not be removed or modified.
-- `refund.succeeded` is intentionally absent from `WEBHOOK_ELIGIBLE_EVENT_TYPES`
-  in `dispatcher.ts` — refund webhooks ship in v1.9 and the event type
-  will be added then. Do not add it prematurely.
-
-### Auth & security
-
-- `Math.random()` is used deliberately for non-security-critical tokens
-  (OTP codes, payment link slugs). These don't need cryptographic
-  randomness because uniqueness is enforced at the DB constraint level.
-- The `displayName` comparison in `creditApproval.ts` matches the audit
-  log format intentionally — see the inline JSDoc.
-
-### Database
-
-- All monetary columns use `INTEGER` (not `BIGINT`). BHD amounts in cents
-  (max ~999,999.99 BD) fit comfortably in a 32-bit integer. Do not widen
-  columns without a migration plan approved by the DBA.
-- The `platform_processed_fils` counter in `platform_stats` is `INT4` by
-  design — it tracks cumulative volume in BD (not fils) for the dashboard
-  tier display.
-
-### Performance
-
-- The CSV export (`exportCsv.ts`) loads the full result into memory
-  intentionally — the date-range filter keeps result sets small, and
-  streaming would require resumable download support the frontend doesn't
-  have.
-- Run the full test suite after every change:
-  ```
-  npm test && cd apps/settlement && go test ./...
-  ```
+- Treat earlier reports, comments and AI answers as leads, not proof. Trace
+  the code path and reproduce before calling something a bug; classify each
+  lead as confirmed, plausible, intentional or false positive.
+- Smallest change that fixes the root cause. No drive-by refactors.
+- Never run `npm run seed` against anything but a throwaway database: it
+  truncates the ledger, merchants and admin users.
+- Production code must not branch on being under test.
+- Verify with `scripts/dev/verify.sh` (fresh database, migrations, typecheck,
+  all suites). The Go DB tests **skip silently** without `DATABASE_URL`; a bare
+  `go test ./...` passing proves little.
+- Never claim a test passed unless you ran it and saw the output.
+- No deploys, pushes, force-pushes or messages to external systems unless the
+  team asks.

@@ -11,7 +11,13 @@ import {
   type AdminRole,
 } from "../adminAuth/sessions.js";
 import { withTransaction } from "../db/withTransaction.js";
-import { BadRequestError, GoneError, TooManyRequestsError, UnauthorizedError } from "../lib/errors.js";
+import {
+  BadRequestError,
+  GoneError,
+  ServiceUnavailableError,
+  TooManyRequestsError,
+  UnauthorizedError,
+} from "../lib/errors.js";
 
 /**
  * A pre-computed argon2id hash of a fixed, never-used dummy password, at the
@@ -71,7 +77,7 @@ export async function adminAuthRoutes(app: FastifyInstance): Promise<void> {
       throw new UnauthorizedError("invalid_credentials");
     }
 
-    const { code, expiresAt, rawToken } = await withTransaction(app.db, async (client) => {
+    const { code, expiresAt, rawToken, adminSessionId } = await withTransaction(app.db, async (client) => {
       const challenge = await issueAdminChallenge(client, {
         adminUserId: user.id,
         ttlMinutes: app.config.adminOtpTtlMinutes,
@@ -85,10 +91,20 @@ export async function adminAuthRoutes(app: FastifyInstance): Promise<void> {
         ipAddress: request.ip,
         userAgent: (request.headers["user-agent"] as string | undefined) ?? null,
       });
-      return { code: challenge.code, expiresAt: challenge.expiresAt, rawToken: session.rawToken };
+      return {
+        code: challenge.code,
+        expiresAt: challenge.expiresAt,
+        rawToken: session.rawToken,
+        adminSessionId: session.id,
+      };
     });
 
-    sendAdminOtpCode(request.log, app.config, { adminUserId: user.id, email: user.email }, code);
+    try {
+      await sendAdminOtpCode(request.log, app.config, { adminUserId: user.id, email: user.email }, code);
+    } catch {
+      await revokeAdminSession(app.db, adminSessionId);
+      throw new ServiceUnavailableError("otp_delivery_failed", "Unable to send a verification code. Please try again.");
+    }
 
     reply.setCookie(app.config.adminCookieName, rawToken, {
       httpOnly: true,

@@ -18,6 +18,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: filspay
       POSTGRES_PASSWORD: filspay_dev_password
@@ -84,8 +85,21 @@ services:
     # WEBHOOK_SECRET_ENCRYPTION_KEY isn't needed in dev; the api uses a built-in
     # dev key unless NODE_ENV=production. (copilot, pasted by FH — unverified)
     command: ["npx", "tsx", "apps/api/src/index.ts"]
+    restart: unless-stopped
+    # The judged footprint: the API gets 0.5 vCPU and 512 MB. The V8 heap is
+    # capped below the container limit so Node collects garbage before the
+    # kernel OOM-kills it.
+    cpus: 0.5
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+    # Public traffic goes through the edge; the api port is for the host only.
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       # One application role (filspay) owns the whole database in this
       # environment. Every service here, and the one-off migrate/seed jobs
@@ -102,12 +116,53 @@ services:
       # boot without its secrets. For a laptop, put NODE_ENV=development in
       # ops/.env (see .env.docker.example).
       NODE_ENV: ${NODE_ENV:-production}
+      # Optional demo-only HTTP login support. OTP_DEV_EXPOSE only has an
+      # effect outside production (production never returns the one-time
+      # code; it emails it via the OTP_SMTP_* settings below).
+      # COOKIE_SECURE=false allows session cookies over unencrypted HTTP;
+      # leave it unset once the edge is behind TLS.
+      OTP_DEV_EXPOSE: ${OTP_DEV_EXPOSE:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-}
+      OTP_SMTP_HOST: ${OTP_SMTP_HOST:-}
+      OTP_SMTP_PORT: ${OTP_SMTP_PORT:-587}
+      OTP_SMTP_SECURE: ${OTP_SMTP_SECURE:-}
+      OTP_SMTP_USER: ${OTP_SMTP_USER:-}
+      OTP_SMTP_PASSWORD: ${OTP_SMTP_PASSWORD:-}
+      OTP_FROM_EMAIL: ${OTP_FROM_EMAIL:-}
+      OTP_FROM_NAME: ${OTP_FROM_NAME:-FilsPay}
       # Must match the settlement service's token; there is no dev fallback.
       SETTLEMENT_INTERNAL_TOKEN: ${SETTLEMENT_INTERNAL_TOKEN:-local-dev-token}
       ACQUIRER_CALLBACK_SIGNING_SECRET: ${ACQUIRER_CALLBACK_SIGNING_SECRET:-}
       WEBHOOK_SECRET_ENCRYPTION_KEY: ${WEBHOOK_SECRET_ENCRYPTION_KEY:-}
+      NODE_OPTIONS: --max-old-space-size=384
+      # Load handling, measured on this footprint (submission, section 3):
+      # a checkout holds one connection across two acquirer calls, so the
+      # pool bounds concurrent checkouts (10 capped throughput at ~20/s, 30
+      # reaches the CPU limit at ~55/s). The edge sheds load first (48 in
+      # flight); this cap is the backstop if the api is reached directly.
+      PG_POOL_MAX: ${PG_POOL_MAX:-30}
+      PG_POOL_CONNECTION_TIMEOUT_MS: ${PG_POOL_CONNECTION_TIMEOUT_MS:-2000}
+      MAX_INFLIGHT_REQUESTS: ${MAX_INFLIGHT_REQUESTS:-100}
+      LOG_LEVEL: ${LOG_LEVEL:-warn}
     depends_on:
       postgres:
+        condition: service_healthy
+
+  # Public entry point: web app (checkout + dashboard) on :80, admin console
+  # on :8080, /v1 proxied to the api on both, excess load refused here with
+  # 503 + Retry-After (ops/nginx.conf). Put TLS in front of this.
+  edge:
+    build:
+      context: ..
+      dockerfile: ops/Dockerfile.edge
+      args:
+        WEB_BASE_URL: ${WEB_BASE_URL:-http://localhost}
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "8080:8080"
+    depends_on:
+      api:
         condition: service_healthy
 
   settlement:
@@ -118,6 +173,10 @@ services:
     # set, so nothing extra is needed here for local runs.
     # FH: it exits at boot without the token for me. set it.
     command: ["./settlement", "daemon"]
+    restart: unless-stopped
+    # A redeploy sends SIGTERM; the daemon lets the in-flight batch
+    # transaction commit or roll back before exiting. Give it time to.
+    stop_grace_period: 60s
     environment:
       DATABASE_URL: postgres://filspay:filspay_dev_password@postgres:5432/filspay?sslmode=disable
       SETTLEMENT_INTERNAL_TOKEN: ${SETTLEMENT_INTERNAL_TOKEN:-local-dev-token}
@@ -136,6 +195,7 @@ services:
       dockerfile: ops/Dockerfile.node
     # No subcommand = `worker`. (MK)
     command: ["npx", "tsx", "apps/reporting/src/index.ts"]
+    restart: unless-stopped
     environment:
       DATABASE_URL: postgres://filspay:filspay_dev_password@postgres:5432/filspay?sslmode=disable
     depends_on:

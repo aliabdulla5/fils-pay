@@ -10,7 +10,13 @@ import {
   revokeSession,
 } from "../auth/sessions.js";
 import { withTransaction } from "../db/withTransaction.js";
-import { BadRequestError, GoneError, TooManyRequestsError, UnauthorizedError } from "../lib/errors.js";
+import {
+  BadRequestError,
+  GoneError,
+  ServiceUnavailableError,
+  TooManyRequestsError,
+  UnauthorizedError,
+} from "../lib/errors.js";
 
 /**
  * A pre-computed argon2id hash of a fixed, never-used dummy password, at
@@ -81,7 +87,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     // the same email's user at merchant A, without A's password.
     const recipient = user;
 
-    const { code, expiresAt, rawToken } = await withTransaction(app.db, async (client) => {
+    const { code, expiresAt, rawToken, sessionId } = await withTransaction(app.db, async (client) => {
       const challenge = await issueChallenge(client, {
         merchantUserId: recipient.id,
         ttlMinutes: app.config.otpTtlMinutes,
@@ -95,10 +101,20 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         ipAddress: request.ip,
         userAgent: (request.headers["user-agent"] as string | undefined) ?? null,
       });
-      return { code: challenge.code, expiresAt: challenge.expiresAt, rawToken: session.rawToken };
+      return {
+        code: challenge.code,
+        expiresAt: challenge.expiresAt,
+        rawToken: session.rawToken,
+        sessionId: session.id,
+      };
     });
 
-    sendOtpCode(request.log, app.config, { merchantUserId: recipient.id, email: recipient.email }, code);
+    try {
+      await sendOtpCode(request.log, app.config, { merchantUserId: recipient.id, email: recipient.email }, code);
+    } catch {
+      await revokeSession(app.db, sessionId);
+      throw new ServiceUnavailableError("otp_delivery_failed", "Unable to send a verification code. Please try again.");
+    }
 
     reply.setCookie(app.config.cookieName, rawToken, {
       httpOnly: true,
@@ -266,12 +282,16 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       `SELECT email FROM merchant_users WHERE id = $1`,
       [pending.merchantUserId],
     );
-    sendOtpCode(
-      request.log,
-      app.config,
-      { merchantUserId: pending.merchantUserId, email: userResult.rows[0]?.email ?? "" },
-      code,
-    );
+    try {
+      await sendOtpCode(
+        request.log,
+        app.config,
+        { merchantUserId: pending.merchantUserId, email: userResult.rows[0]?.email ?? "" },
+        code,
+      );
+    } catch {
+      throw new ServiceUnavailableError("otp_delivery_failed", "Unable to send a verification code. Please try again.");
+    }
 
     const responseBody: Record<string, unknown> = { otpRequired: true, otpExpiresAt: expiresAt.toISOString() };
     if (app.config.otpDevExpose) {

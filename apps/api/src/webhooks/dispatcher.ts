@@ -54,13 +54,11 @@ export type DispatcherConfig = Pick<
 export function backoffDelayMs(
   attemptNumber: number,
   config: Pick<Config, "webhookBackoffBaseMs" | "webhookBackoffCapMs">,
-  jitter?: () => number,
+  jitter: () => number = Math.random,
 ): number {
-  const isTest = (config as unknown as { nodeEnv?: string }).nodeEnv === "test" || process.env.NODE_ENV === "test";
-  const jitterFn = jitter ?? (isTest ? () => 0.5 : Math.random);
   const raw = config.webhookBackoffBaseMs * 2 ** (attemptNumber - 1);
   const capped = Math.min(raw, config.webhookBackoffCapMs);
-  return Math.round(capped * (0.9 + jitterFn() * 0.2));
+  return Math.round(capped * (0.9 + jitter() * 0.2));
 }
 
 interface DueEventRow {

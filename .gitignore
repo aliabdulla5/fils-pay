@@ -5,7 +5,11 @@ dist/
 .env.local
 npm-debug.log*
 .DS_Store
-.claude/
+# Per-person Claude Code state stays local; the team's shared settings and
+# custom commands are committed.
+.claude/*
+!.claude/settings.json
+!.claude/commands/
 
 # Real env files never go in git (ops/.env.docker held a live signing
 # secret). `.env` does not match `.env.docker` — gitignore has no prefixes.

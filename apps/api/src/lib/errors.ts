@@ -73,6 +73,13 @@ export class TooManyRequestsError extends AppError {
   }
 }
 
+/** 503 — a required upstream service, such as SMTP, is unavailable. */
+export class ServiceUnavailableError extends AppError {
+  constructor(code: string, message?: string) {
+    super(503, code, message);
+  }
+}
+
 export class InternalError extends AppError {
   constructor(code = "internal_error", message?: string) {
     super(500, code, message);

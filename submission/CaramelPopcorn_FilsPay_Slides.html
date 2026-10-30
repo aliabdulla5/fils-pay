@@ -32,14 +32,13 @@
 
 <section class="slide">
   <div class="kicker">The Handover · FilsPay</div>
-  <h1><span class="todo">[Team name]</span></h1>
+  <h1>Caramel Popcorn</h1>
   <table>
     <tr><th>Member</th><th>Owned</th></tr>
-    <tr><td><span class="todo">[Name]</span></td><td><span class="todo">[Settlement &amp; money fixes]</span></td></tr>
-    <tr><td><span class="todo">[Name]</span></td><td><span class="todo">[Security &amp; API]</span></td></tr>
-    <tr><td><span class="todo">[Name]</span></td><td><span class="todo">[Deployment &amp; load test]</span></td></tr>
+    <tr><td>Ali Abdulla</td><td>Security &amp; money review, fixes, refunds, load hardening, AI setup, report</td></tr>
+    <tr><td>Ali Aldoseri</td><td>Docker &amp; deployment fixes, design of checkout, dashboard and admin</td></tr>
   </table>
-  <p style="margin-top:28px">92 findings · 79 fixed · 10 left open, each with a stated reason · 0 tests edited</p>
+  <p style="margin-top:28px">94 findings · 81 fixed · 10 left open, each with a stated reason · 0 tests edited</p>
   <div class="footer"><span>1 · Team</span><span>FilsPay</span></div>
 </section>
 
@@ -95,26 +94,25 @@
     <li>Full refund of the remainder: reversed fee sums to exactly the fee charged</li>
     <li>Run settlement for the completed day: the batch nets the refunds; show the reconciliation page and its gap</li>
   </ol>
-  <p><span class="todo">[Backup screenshots: detail page, settlement batch, reconciliation]</span></p>
+  <p style="font-size:18px">Backup screenshots: <code>submission/evidence/screenshots/</code> (refunded transaction, reconciliation with gap 0)</p>
   <div class="footer"><span>5 · Live demo</span><span>FilsPay</span></div>
 </section>
 
 <section class="slide">
   <div class="kicker">Under load</div>
   <div class="cols">
-    <div class="mono">Internet → proxy (TLS)
-  ├ web / admin (static)
-  └ api :3000 ─┐
-               ▼
-     postgres (127.0.0.1)
-       ▲            ▲
- settlement :8091   reporting
- (internal only)    (no port)</div>
+    <div class="mono">Internet → TLS
+  └ edge (nginx) :80 web · :8080 admin
+      max 48 in flight → else 503 + Retry-After
+      └ api (0.5 vCPU / 512 MB, pool 30)
+          └ postgres (localhost only)
+ settlement · reporting (no public ports)
+ restart: unless-stopped everywhere</div>
     <div>
-      <p><b>Estimate (from code):</b> ~5 checkouts in flight (pool of 5); about 6–15 checkouts/s</p>
-      <p><b>Measured:</b> <span class="todo">[users, p95, error rate]</span></p>
-      <p><b>Bottleneck:</b> DB pool + row lock held across the acquirer call</p>
-      <p><b>Overload:</b> <span class="todo">[429 / rate limit / restart policy you configured]</span></p>
+      <p><b>Estimated:</b> about 50 checkouts/s · <b>Measured:</b> 55.5/s, p95 989 ms at 40 buyers</p>
+      <p><b>5× overload:</b> excess refused immediately with 503, admitted p95 2.5 s, <b>zero 500s</b>, instant recovery</p>
+      <p><b>Kill -9 mid-traffic:</b> back in 5 s; 17,663 checkouts with 0 double charges and 0 lost payments</p>
+      <p><b>Fixed on the way:</b> pool 10→30 (measured 20→55/s); ledger trigger did 4 full-table scans per checkout (39 ms → 0.26 ms)</p>
     </div>
   </div>
   <div class="footer"><span>6 · Under load</span><span>FilsPay</span></div>
@@ -122,7 +120,7 @@
 
 <section class="slide">
   <div class="kicker">How we used AI</div>
-  <p><b>Setup:</b> Claude Code with the repo and a disposable Postgres container. Every claim had to come with a reproduction on a fresh database. <span class="todo">[your setup files]</span></p>
+  <p><b>Setup:</b> Claude Code with the repo and a disposable Postgres container. Every claim had to come with a reproduction on a fresh database. One rule set for Claude Code, Codex and Gemini (<code>AGENTS.md</code>), permission rules, <code>/verify</code>, <code>/triage-finding</code>, <code>/load-test</code>.</p>
   <div class="box"><b>When the AI was wrong:</b> it reported a "patched" verification copy that held only 2 of 16 fixes, because zsh doesn't split <code>$MINE</code> into separate paths. A byte-for-byte comparison against the working tree caught it; everything was rebuilt and re-run.</div>
   <div class="box"><b>Also caught:</b> an earlier AI claim that "Go tests pass". The database-backed tests skip without <code>DATABASE_URL</code>; with a real database, 2 fail. And the repo's own agent files say amounts are cents, which ADR-0001 contradicts.</div>
   <div class="footer"><span>7 · AI</span><span>FilsPay</span></div>
