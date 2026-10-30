@@ -1,0 +1,9 @@
+-- Run after the load, overload and kill -9 tests (links are the plink_edge_% batch).
+SELECT 'paid links' AS check, count(*)::text AS value FROM payment_links WHERE token LIKE 'plink_edge_%' AND status='paid'
+UNION ALL SELECT 'paid links whose transaction amount/capture mismatch', count(*)::text FROM payment_links pl JOIN transactions t ON t.id=pl.transaction_id WHERE pl.token LIKE 'plink_edge_%' AND (t.captured_fils <> pl.amount_fils OR t.status <> 'captured')
+UNION ALL SELECT 'transactions attached to more than one link', count(*)::text FROM (SELECT transaction_id FROM payment_links WHERE transaction_id IS NOT NULL GROUP BY 1 HAVING count(*)>1) x
+UNION ALL SELECT 'captured edge transactions with no paid link (charged, not recorded)', count(*)::text FROM transactions t WHERE t.reference LIKE 'edge-%' AND t.status IN ('captured','partially_captured') AND NOT EXISTS (SELECT 1 FROM payment_links pl WHERE pl.transaction_id=t.id)
+UNION ALL SELECT 'links with more than one captured transaction (double charge)', count(*)::text FROM (SELECT reference FROM transactions WHERE reference LIKE 'edge-%' AND status='captured' GROUP BY 1 HAVING count(*)>1) x
+UNION ALL SELECT 'links still reserved', count(*)::text FROM payment_links WHERE token LIKE 'plink_edge_%' AND status='reserved'
+UNION ALL SELECT 'unbalanced ledger groups', count(*)::text FROM (SELECT entry_group_id FROM ledger_entries GROUP BY 1 HAVING sum(CASE WHEN direction='debit' THEN amount_fils ELSE -amount_fils END) <> 0) x
+UNION ALL SELECT 'paid links missing their gross ledger credit', count(*)::text FROM payment_links pl WHERE pl.token LIKE 'plink_edge_%' AND pl.status='paid' AND NOT EXISTS (SELECT 1 FROM ledger_entries le WHERE le.transaction_id=pl.transaction_id AND le.account_id='merchant_payable' AND le.direction='credit' AND le.amount_fils=pl.amount_fils);

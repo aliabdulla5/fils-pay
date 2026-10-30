@@ -48,7 +48,7 @@
 </section>
 
 <h2>1. Summary</h2>
-<p><b>What we found.</b> The case file's 25 items split into 74 distinct defects. A second review pass found 18 more (inventory items 75–92). In total that is 92 findings in <code>docs/BUG_INVENTORY.md</code>: 79 confirmed and fixed, 10 confirmed and left open (most by explicit instruction, the rest needing DBA or design approval), and 1 rejected as intentional. The new ones include an unauthenticated reporting endpoint and a cross-merchant data leak. On the money side, a hold-expiry script deleted every hold on a quiet night, a capture replay double-credited a merchant's discount, and an admin re-run could close an unfinished business day and strand that day's later captures.</p>
+<p><b>What we found.</b> The case file's 25 items split into 74 distinct defects. A second review pass found 19 more (inventory items 75–93). In total that is 93 findings in <code>docs/BUG_INVENTORY.md</code>: 80 confirmed and fixed, 10 confirmed and left open (most by explicit instruction, the rest needing DBA or design approval), and 1 rejected as intentional. The new ones include an unauthenticated reporting endpoint and a cross-merchant data leak. On the money side, a hold-expiry script deleted every hold on a quiet night, a capture replay double-credited a merchant's discount, and an admin re-run could close an unfinished business day and strand that day's later captures.</p>
 <p><b>What we fixed.</b> Every confirmed defect that the repository rules allow us to fix, each with the smallest change that works. Fixes are in the source and migrations; no test was edited.</p>
 <p><b>What we left alone.</b> Frozen code (<code>packages/money</code>, the Go money mirror), locked tests, the v1 partner API's 501 stubs, the deferred refund webhook, the documented <code>Math.random()</code> and display-name rules, and anything needing a DBA-approved migration (widening the platform volume counter, replacing the REAL lifetime estimate).</p>
 <p><b>Main root cause.</b> The same fact is computed in two places that drifted apart, and nothing checks that they agree. Examples:</p>
@@ -62,31 +62,62 @@
 <p>Locked tests that assert the buggy behaviour make the drift look correct.</p>
 
 <h2>2. Architecture and deployment</h2>
-<div class="diagram">Internet
-   │  HTTPS (reverse proxy / TLS)  <span class="todo">[your proxy: Caddy/nginx — fill in]</span>
-   ├──► web  (checkout + merchant dashboard, static build)      <span class="todo">[port]</span>
-   ├──► admin (ops console, static build)                       <span class="todo">[port]</span>
-   └──► api  :3000   Fastify — merchant, checkout, admin, acquirer callbacks
-              │ webhook dispatcher runs in-process (LISTEN/NOTIFY + poll)
-              ▼
-         postgres :5432 (bound to 127.0.0.1 only)
-              ▲            ▲
-   settlement :8091 (internal only, bearer token)   reporting (no port; outbox consumer)
-   daemon: daily close 00:15 Asia/Bahrain</div>
+<div class="diagram">Internet ── TLS terminator <span class="todo">[your host / Dilmune]</span>
+   │
+   ▼
+ edge (nginx) :80  web app: checkout + merchant dashboard, /v1 → api
+              :8080 admin console, /v1 → api
+              sheds load: max 48 api requests in flight, excess → JSON 503 + Retry-After
+   │
+   ▼
+ api :3000 (127.0.0.1 only)  Fastify, 0.5 vCPU / 512 MB, pool 30, in-flight cap 100
+   │  webhook dispatcher in-process (LISTEN/NOTIFY + poll)
+   ▼
+ postgres :5432 (127.0.0.1 only)
+   ▲                       ▲
+ settlement :8091          reporting (no port)
+ internal only, bearer     outbox consumer
+ daily close 00:15 Asia/Bahrain</div>
+<p>Only the edge faces the internet. The api and Postgres ports are bound to the host's loopback, and settlement's internal API has no published port at all.</p>
 <ul>
-  <li><b>Redeploy:</b> <code>docker compose -f ops/docker-compose.yml up -d --build api settlement reporting</code>, with migrations run first: <code>docker compose -f ops/docker-compose.yml run --rm migrate</code>. The <code>seed</code> job sits behind a profile and never runs on <code>up</code>, because it truncates the ledger.</li>
-  <li><b>Secrets:</b> an <code>ops/.env</code> file that is gitignored, read by compose for <code>${VAR}</code> substitution (template: <code>ops/.env.docker.example</code>). <code>NODE_ENV</code> defaults to <code>production</code>, and production refuses to boot without <code>SETTLEMENT_INTERNAL_TOKEN</code>, <code>ACQUIRER_CALLBACK_SIGNING_SECRET</code> and <code>WEBHOOK_SECRET_ENCRYPTION_KEY</code>. One acquirer signing secret was committed to git history in the past and must be rotated with the acquirer.</li>
-  <li><b>Health checks:</b> the API serves <code>/healthz</code> (liveness) and <code>/readyz</code> (DB reachable), and Postgres has a compose healthcheck. <span class="todo">[Add your restart policy (e.g. <code>restart: unless-stopped</code>) and API limits (0.5 vCPU / 512 MB) if your deployment sets them.]</span></li>
-  <li><b>Redeploys and settlement runs:</b> each batch close and each payout is one Postgres transaction. On SIGTERM the daemon cancels its context, so an in-flight transaction commits or rolls back and never half-applies. Close and pay are idempotent per (merchant, date), so the next daemon tick, or <code>settlement run-batch --date=…</code>, completes the day safely. A run-batch for an unfinished business day is now refused (finding 78).</li>
+  <li><b>Redeploy (one command):</b> <code>docker compose -f ops/docker-compose.yml up -d --build</code>, preceded on schema changes by <code>docker compose -f ops/docker-compose.yml run --rm migrate</code>. The <code>seed</code> job is behind a profile and never runs on <code>up</code>, because it truncates the ledger.</li>
+  <li><b>Secrets:</b> <code>ops/.env</code>, which is gitignored and read by compose for <code>${VAR}</code> substitution (template: <code>ops/.env.docker.example</code>). <code>NODE_ENV</code> defaults to <code>production</code>, and production refuses to boot without <code>SETTLEMENT_INTERNAL_TOKEN</code>, <code>ACQUIRER_CALLBACK_SIGNING_SECRET</code> and a 32-byte <code>WEBHOOK_SECRET_ENCRYPTION_KEY</code>. One acquirer signing secret was committed to git history in the past and must be rotated with the acquirer.</li>
+  <li><b>Health checks and restarts:</b> every service has <code>restart: unless-stopped</code>. The api has a container health check on <code>/healthz</code> (every 10 s), and the edge starts only once the api is healthy. Postgres has its own health check. Measured: after the api process was killed with <code>SIGKILL</code> mid-traffic, it was serving again <b>5 seconds</b> later (see section 3).</li>
+  <li><b>Redeploys and settlement runs:</b> each batch close and each payout is one Postgres transaction. On SIGTERM the daemon lets the in-flight transaction commit or roll back, and compose gives it <code>stop_grace_period: 60s</code> to do so. Close and pay are idempotent per (merchant, date), so the next tick or <code>settlement run-batch --date=…</code> finishes the day. Closing an unfinished business day is refused (finding F78).</li>
 </ul>
 
 <h2>3. Capacity</h2>
-<p class="todo">[Fill in from your own load test on the deployed server: tool, scenario, users, p95 latency, error rate, graph.]</p>
-<p><b>Estimate from the code, not yet measured.</b> A checkout holds one pooled connection for the whole pay attempt: an advisory lock, then authorize, then capture, which keeps the row lock across the simulated acquirer call. The simulated acquirer takes 100–400 ms per call, so a checkout takes roughly 0.3–0.9 s. With <code>PG_POOL_MAX=5</code>, about 5 checkouts run at once, which is roughly 6–15 checkouts per second before requests queue on the pool. Raising the pool size is the first lever, within Postgres's connection budget on a 2 GB host.</p>
-<p><b>Bottleneck:</b> the API's database pool and the lock held across the acquirer call. <b>Overload behaviour today:</b> requests wait up to <code>PG_POOL_CONNECTION_TIMEOUT_MS</code> (5 s) for a connection, then fail with 500. There is no admission control or 429 yet. <span class="todo">[Describe what you added, e.g. proxy rate limits or a queue-length cap.]</span> Recovery: the pool and the process are stateless apart from Postgres, so a restart recovers without losing data (idempotency keys make client retries safe).</p>
+<p><b>Estimate: about 50 checkouts per second</b> (about 100 requests/s; one checkout is a page load plus a pay call) with p95 under 1 s, at around 40 concurrent buyers. Above that, the stack refuses the excess quickly instead of slowing everyone down.</p>
+<p><b>Our load test.</b> Tool: a Node load driver (<code>submission/evidence/load/checkout_load.mjs</code>). Each virtual buyer opens a fresh, single-use payment link (<code>GET /v1/payment-links/:token</code>) and pays it (<code>POST …/pay</code>), in a loop, with no think time. Target: the full compose stack through the edge, with the api limited to exactly <b>0.5 vCPU / 512 MB</b>, in production mode. The acquirer simulator adds 100–400 ms per call and declines or fails about 2% of cards on purpose (the 402/502 responses below).</p>
+<table>
+<tr><th>Concurrent buyers</th><th>Paid / s</th><th>p50</th><th>p95</th><th>p99</th><th>Outcome</th></tr>
+<tr><td>10</td><td>18.1</td><td>537 ms</td><td>797 ms</td><td>926 ms</td><td>all served</td></tr>
+<tr><td>20</td><td>37.6</td><td>527 ms</td><td>770 ms</td><td>895 ms</td><td>all served</td></tr>
+<tr><td><b>40</b></td><td><b>55.5</b></td><td><b>704 ms</b></td><td><b>989 ms</b></td><td>1.1 s</td><td><b>capacity</b>: all served</td></tr>
+<tr><td>60</td><td>46.2</td><td>763 ms</td><td>1.3 s</td><td>1.6 s</td><td>excess refused with 503</td></tr>
+<tr><td>200 (5× overload)</td><td>24.0</td><td>1.0 s</td><td>2.5 s</td><td>3.0 s</td><td>excess refused with 503; <b>zero 500s</b></td></tr>
+<tr><td>back to 40</td><td>52.8</td><td>727 ms</td><td>1.2 s</td><td>1.4 s</td><td>recovered immediately</td></tr>
+</table>
+<p><b>Where the bottleneck was, and what we changed:</b></p>
+<ol>
+  <li><b>Database pool.</b> A checkout holds one connection across two acquirer calls, so the original pool of 5 capped throughput at about 10 checkouts/s; at 10 it measured 20/s. With a pool of 30 the api reaches its CPU limit (about 45–50% of one core in <code>docker stats</code>) at about 55/s.</li>
+  <li><b>Ledger scans (finding F93).</b> The ledger's deferred balance trigger scanned the whole <code>ledger_entries</code> table four times per checkout, because <code>entry_group_id</code> had no index. That made checkouts slower as the ledger grew; one check took 39 ms at 68k rows. Migration 0080 adds the index: 0.26 ms.</li>
+  <li><b>Overload.</b> Before, excess requests queued on the pool for 5 s and then failed with 500. Now the edge admits at most 48 api requests at once and answers the rest with an immediate JSON 503 and <code>Retry-After: 1</code>. The api has its own in-flight cap (100) as a backstop, and maps pool timeouts to 503. The edge also turns 502/504 during an api restart into the same retryable 503.</li>
+</ol>
+<p><b>Restart and recovery.</b> We killed the api's node process (<code>SIGKILL</code>) during a 20-buyer run. The restart policy brought it back and it was serving 5 seconds later. While it was down the edge answered 503. The checkouts in flight at the moment of the kill were left <i>reserved</i>, never captured, and became payable again after the 60 s reservation window; we paid one to confirm.</p>
+<p><b>No data lost.</b> After all runs (17,663 paid checkouts, overload stages and the kill) we checked the database:</p>
+<ul>
+  <li>0 double charges.</li>
+  <li>0 transactions attached to two links.</li>
+  <li>0 amount mismatches.</li>
+  <li>0 captured payments without a paid link.</li>
+  <li>0 unbalanced ledger groups.</li>
+  <li>0 paid links missing their ledger credit.</li>
+</ul>
+<p class="muted">Caveats: the load generator ran on the same machine as the stack, so under 5× overload it competed with the stack for CPU (it generated thousands of rejected requests per second). Goodput at 200 buyers should be better with a remote generator. <span class="todo">[Re-run on the deployed server and replace these numbers.]</span></p>
 
 <h2 class="page">4. Findings report</h2>
-<p>The full inventory, with all 92 entries and their status, is <code>docs/BUG_INVENTORY.md</code>. Items 1–74 come from the first rounds (the sibling review); they are summarised in the table at the end of this section. Below are the 18 findings from the second review pass, written out in full.</p>
+<p>The full inventory, with all 93 entries and their status, is <code>docs/BUG_INVENTORY.md</code>. Items 1–74 come from the first rounds (the sibling review); they are summarised in the table at the end of this section. Below are the 19 findings from the second review pass, written out in full.</p>
 <p class="muted">Method for every entry: we traced the path from input to side effect, checked the ADRs, handover and changelog for intended behaviour, reproduced the defect, applied the smallest fix, and verified it against a freshly migrated Postgres 16 database. We used an untouched copy of <code>HEAD</code> plus only our patch, so unrelated working-tree changes could not affect the results. The full suites were then re-run: no new failures (see Appendix).</p>
 
 <div class="finding"><h3>F75 — Reporting endpoint with no authentication</h3>
@@ -127,6 +158,9 @@
 
 <div class="finding"><h3>F90, F91, F92 — Smaller correctness gaps</h3>
 <p><b>F90:</b> credits accepted a future effective date, although the contract rejects it, so ledger legs were dated in a period that hasn't happened yet. Now dates after today's Bahrain date return 400. <b>F91:</b> split payouts never updated the lifetime payout estimate; fixed. <b>F92:</b> the admin console's default run-batch date was two days ago between 00:00 and 03:00 Bahrain time; it now defaults to the last completed Bahrain day.</p></div>
+
+<div class="finding"><h3>F93 — Every checkout scanned the whole ledger</h3>
+<p><b>Symptom:</b> under load Postgres burned CPU while the api waited on <code>COMMIT</code>, and checkouts got slower as the ledger grew. <b>Found:</b> sampling <code>pg_stat_activity</code> during the load test, then <code>EXPLAIN ANALYZE</code>. <b>Root cause:</b> the deferred balance trigger from migration 0007 runs <code>SELECT … WHERE entry_group_id = $1</code> for every ledger row at commit, and nothing indexed <code>entry_group_id</code>. That meant four full scans per capture (39 ms at 68k rows, linear in table size). The refund and discount paths also read legs by the unindexed <code>transaction_id</code>. <b>Fix:</b> migration 0080 adds both indexes. <b>Verified:</b> the plan switches to an index scan (39 ms → 0.26 ms) and the load test holds about 55 checkouts/s. <b>Existing data:</b> none changed. On a large production ledger, build the indexes <code>CONCURRENTLY</code> first; the migration is then a no-op.</p></div>
 
 <h3>Platform volume counter (item 73, partly fixed)</h3>
 <p>In Go, <code>current + int32(gross)</code> wrapped negative past 2,147,483,647 fils. That is only about 147,483 BD after the 2,000,000,000-fils volume tier switches on, so the 15 bps bonus would silently switch back off. The counter now stops at its maximum instead of wrapping; widening the INTEGER column still needs a DBA-approved migration.</p>
@@ -187,6 +221,48 @@
 
 <h2>6. AI usage</h2>
 <p><b>Setup.</b> Claude Code (VS Code extension) with read and write access to the repository, a disposable Postgres 16 container (<code>filspay-test</code>) with one fresh database per verification run, and the Go and Node toolchains. Every fix was verified on an untouched export of <code>HEAD</code> plus only our patch, so concurrent edits in the shared working tree could not affect results. <span class="todo">[List your committed AI setup files here: agent instructions, custom commands, permission rules, helper scripts, and where they live.]</span> We deliberately did <i>not</i> follow the repository's own agent files where they contradict the ADRs: "amounts are cents", "settlement windows are UTC", "docs are the source of truth".</p>
+
+<h3>How we prompted the review, and why</h3>
+<p>We did not ask the AI to "find bugs". We gave it one long, structured brief, written to keep it on the rails the repository itself kept knocking it off. The brief, condensed:</p>
+<pre>Review the prior bug-finding work, find additional real defects, fix the ones you are authorised to fix,
+and verify the result. Do not stop because you found a number of bugs or because it takes time.
+
+First, read completely: the agent instructions, ARCHITECTURE.md, every ADR, HANDOVER.md, CHANGELOG.md,
+the bug inventory and the earlier reports. Treat prior reports as leads, not proof.
+
+Hard constraints: don't touch packages/money or its Go mirror; don't edit tests (they are regression-locked;
+never change expectations to make a test pass); use parseBhdToFils for amounts; keep the v1 501 stubs, the
+deferred refund webhook, the documented Math.random() use and the display-name comparison; don't widen money
+columns without an approved migration; keep settlement windows consistent with the architecture and ADRs;
+no deploys, pushes or messages to external systems; never claim a test passed unless you ran it.
+
+For each suspected defect: trace input to side effect; check auth, validation, transactions, concurrency,
+idempotency, time zones, money units, constraints; check the docs for intended behaviour; classify it as
+confirmed, plausible, intentional or false positive. Only confirmed defects count. Don't use a finding count
+as a goal.
+
+Fix every confirmed defect you safely can, with small focused changes. If a fix is prohibited or needs
+approval, leave it, say why, and carry on.
+
+Verify: git diff --check, typecheck, npm test, go test, migrations on disposable databases only. Tell
+regressions apart from stale assertions, flaky tests and shared-database contamination.
+
+Deliver: fixes in the tree, an updated inventory with separate totals (fixed, open with reason, intentional,
+test/environment problems), and a candid report. Don't claim the code is bug-free.</pre>
+<p><b>Why it is written that way:</b></p>
+<table>
+<tr><th>Part of the brief</th><th>Failure it guards against</th></tr>
+<tr><td>Read the ADRs, architecture and handover <i>before</i> editing</td><td>The repository's own agent files (<code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>.cursorrules</code>) contain confident, false rules: "amounts are cents", "settlement windows are UTC", "the Go service is always right". A model that obeys the first instruction file it reads repeats those bugs. Reading the decision records first lets it notice the contradiction, and the ADRs win.</td></tr>
+<tr><td>Prior reports are leads, not proof</td><td>Earlier rounds produced confident claims that did not hold up, for example "the Go tests pass", which was only true because the database tests skip silently without <code>DATABASE_URL</code>. Every claim has to be re-checked against code and a real database.</td></tr>
+<tr><td>Explicit hard constraints</td><td>Without them a model "fixes" intentional behaviour (the v1 501 stubs, the deferred refund webhook) or edits frozen, audited code to make a symptom disappear.</td></tr>
+<tr><td>Never edit tests; never change expectations to pass</td><td>The commonest way an AI turns red into green is to change the test, or change correct code to match a test that pins a bug. Several locked tests here assert the defects themselves, so a failing test has to be explained, not silenced.</td></tr>
+<tr><td>Classify every lead; only confirmed defects count; no finding-count target</td><td>Prevents padded reports and plausible-sounding but invented bugs. Each finding has to survive a trace through the code and, wherever possible, a reproduction.</td></tr>
+<tr><td>Decide routine matters alone, but stop at policy lines and explain</td><td>A long autonomous run should not stall on questions it can answer from the docs. It also must not cross a line (a schema widening, a frozen file) that needs a human's sign-off.</td></tr>
+<tr><td>Verification on disposable databases; distinguish failure types</td><td>"Tests fail" carries no information unless you know whether it is a regression, a stale assertion or one suite polluting another's data. It also keeps real data out of reach.</td></tr>
+<tr><td>Don't claim a test passed unless it ran; be candid about coverage</td><td>Directly targets hallucinated verification, the failure that matters most in a payments codebase.</td></tr>
+<tr><td>No deploys, pushes or external messages</td><td>Keeps every outward-facing action with the team.</td></tr>
+</table>
+<p>The same brief also explains the follow-up checks we asked for: "is everything finished?" (which turned five "plausible" leads into reproduced, fixed defects) and "are these bugs from the original repo or from us?" (answered by running the reproductions against the original commit).</p>
 
 <h3>Excerpt 1 — F80, hold expiry deletes every hold</h3>
 <p><b>Prompt and context:</b> a broad review prompt (review prior work, find new defects, fix, verify, don't edit tests) with the full repository, handover and ADRs. <b>AI answer (excerpt):</b></p>

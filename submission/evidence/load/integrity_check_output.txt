@@ -1,0 +1,12 @@
+                                check                                 | value 
+----------------------------------------------------------------------+-------
+ links with more than one captured transaction (double charge)        | 0
+ paid links                                                           | 17664
+ transactions attached to more than one link                          | 0
+ links still reserved                                                 | 19
+ paid links whose transaction amount/capture mismatch                 | 0
+ paid links missing their gross ledger credit                         | 0
+ captured edge transactions with no paid link (charged, not recorded) | 0
+ unbalanced ledger groups                                             | 0
+(8 rows)
+
