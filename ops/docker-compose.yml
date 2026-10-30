@@ -116,6 +116,11 @@ services:
       # boot without its secrets. For a laptop, put NODE_ENV=development in
       # ops/.env (see .env.docker.example).
       NODE_ENV: ${NODE_ENV:-production}
+      # Optional demo-only HTTP login support. Keep these unset for production:
+      # OTP_DEV_EXPOSE returns the one-time code in the login response, and
+      # COOKIE_SECURE=false allows session cookies over unencrypted HTTP.
+      OTP_DEV_EXPOSE: ${OTP_DEV_EXPOSE:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-}
       # Must match the settlement service's token; there is no dev fallback.
       SETTLEMENT_INTERNAL_TOKEN: ${SETTLEMENT_INTERNAL_TOKEN:-local-dev-token}
       ACQUIRER_CALLBACK_SIGNING_SECRET: ${ACQUIRER_CALLBACK_SIGNING_SECRET:-}
