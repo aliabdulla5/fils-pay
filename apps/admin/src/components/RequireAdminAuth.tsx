@@ -1,6 +1,7 @@
 import { Navigate, useLocation } from "react-router-dom";
 import type { ReactNode } from "react";
 import { useAdminAuth } from "../auth/AdminAuthContext.js";
+import { BrandMark } from "./icons.js";
 
 /**
  * Route guard: renders its children only once `GET /v1/admin/auth/me` has
@@ -19,8 +20,13 @@ export function RequireAdminAuth({ children }: { children: ReactNode }) {
 
   if (status === "loading") {
     return (
-      <main className="admin-centered">
-        <p>Checking your session...</p>
+      <main className="admin-auth">
+        <div className="admin-auth-status">
+          <BrandMark />
+          <p className="admin-loading" role="status">
+            Checking your session...
+          </p>
+        </div>
       </main>
     );
   }

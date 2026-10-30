@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { formatBhd, toFils } from "@filspay/money";
 import {
   getAdjustmentImportRows,
@@ -7,6 +7,8 @@ import {
 } from "../../api/adjustmentImports.js";
 import { describeError } from "../../api/client.js";
 import { RequireRole } from "../../auth/RequireRole.js";
+import { IconFile } from "../../components/icons.js";
+import { Card, EmptyRow, ErrorMessage, GateNote, Money, Notice, PageHeader } from "../../components/ui.js";
 import type {
   AdjustmentImportRowDetail,
   AdjustmentImportSummary,
@@ -34,6 +36,7 @@ export function AdjustmentImportPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
 
   const [imports, setImports] = useState<AdjustmentImportSummary[]>([]);
   const [listError, setListError] = useState<string | null>(null);
@@ -95,113 +98,228 @@ export function AdjustmentImportPage() {
     }
   }
 
+  /** Fills the same two fields an operator could type or paste into — the
+   *  Apply handler and what it sends are unchanged. Nothing is uploaded here. */
+  async function handleFileChosen(event: React.ChangeEvent<HTMLInputElement>): Promise<void> {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setFileError(null);
+    try {
+      setCsvContent(await file.text());
+      setFilename(file.name);
+    } catch {
+      setFileError(`Could not read ${file.name}. Paste its contents into the CSV box instead.`);
+    }
+  }
+
+  // Display only: a count of non-blank lines after the header, so the operator
+  // can sanity-check the paste before applying. The server does the real parse.
+  const contentLines = csvContent.split(/\r?\n/).filter((line) => line.trim() !== "");
+  const dataLineCount = Math.max(
+    0,
+    contentLines.length - (contentLines[0]?.toLowerCase().startsWith("merchantid") ? 1 : 0),
+  );
+
   return (
-    <section>
-      <h1>Import adjustments</h1>
-      <p className="admin-muted">
-        Applies a CSV of manual balance corrections immediately — one balanced ledger posting per
-        row. Uploading is gated server-side to the <code>finance</code> and{" "}
-        <code>super_admin</code> roles.
-      </p>
-
-      <RequireRole
-        allow={["finance", "super_admin"]}
-        fallback={
-          <p className="admin-muted">
-            Your role is read-only here. The import history below is still available.
-          </p>
+    <section className="admin-page">
+      <PageHeader
+        title="Import adjustments"
+        description={
+          <>
+            Applies a CSV of manual balance corrections immediately — one balanced ledger posting per
+            row. Uploading is gated server-side to the <code>finance</code> and{" "}
+            <code>super_admin</code> roles.
+          </>
         }
-      >
-        <form className="admin-form" onSubmit={(e) => void handleApply(e)}>
-          <label>
-            File name (optional)
-            <input
-              value={filename}
-              onChange={(e) => setFilename(e.target.value)}
-              placeholder="march-corrections.csv"
-            />
-          </label>
-          <label>
-            CSV (columns: merchantId, amount, reason)
-            <textarea
-              value={csvContent}
-              onChange={(e) => setCsvContent(e.target.value)}
-              rows={8}
-              placeholder={CSV_PLACEHOLDER}
-              required
-            />
-          </label>
-          <button type="submit" disabled={busy || !csvContent.trim()}>
-            {busy ? "Applying…" : "Apply"}
-          </button>
-        </form>
-      </RequireRole>
+      />
 
-      {error ? <p className="admin-error">{error}</p> : null}
-      {notice ? <p>{notice}</p> : null}
+      {error ? <ErrorMessage>{error}</ErrorMessage> : null}
+      {notice ? <Notice>{notice}</Notice> : null}
 
-      <h2>Past imports</h2>
-      {listError ? <p className="admin-error">{listError}</p> : null}
-      {imports.length === 0 ? (
-        <p className="admin-muted">No imports yet.</p>
-      ) : (
-        <table className="admin-table">
-          <thead>
-            <tr>
-              <th>Applied</th>
-              <th>File</th>
-              <th>Rows</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {imports.map((item) => (
-              <tr key={item.id}>
-                <td>{item.appliedAt}</td>
-                <td>{item.originalFilename}</td>
-                <td>{item.rowCount}</td>
-                <td>
-                  <button type="button" onClick={() => void handleOpenRows(item.id)}>
-                    {openImportId === item.id ? "Hide rows" : "View rows"}
+      <div className="admin-grid-detail">
+        <Card title="New import" id="import-new">
+          <div className="admin-card-body">
+            <RequireRole
+              allow={["finance", "super_admin"]}
+              fallback={
+                <GateNote>Your role is read-only here. The import history below is still available.</GateNote>
+              }
+            >
+              <form className="admin-form" onSubmit={(e) => void handleApply(e)}>
+                <label className="admin-file">
+                  <span className="admin-file-icon">
+                    <IconFile />
+                  </span>
+                  <span>
+                    <strong>Choose a .csv file</strong>
+                    Its contents load into the box below for review. Nothing is applied until you press
+                    Apply.
+                  </span>
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={(e) => void handleFileChosen(e)}
+                  />
+                </label>
+                {fileError ? <ErrorMessage>{fileError}</ErrorMessage> : null}
+
+                <label className="admin-field">
+                  <span className="admin-field-label">
+                    File name <span className="admin-field-optional">Optional</span>
+                  </span>
+                  <input
+                    value={filename}
+                    onChange={(e) => setFilename(e.target.value)}
+                    placeholder="march-corrections.csv"
+                  />
+                </label>
+                <label className="admin-field">
+                  <span className="admin-field-label">
+                    CSV (columns: merchantId, amount, reason)
+                    {csvContent.trim() ? (
+                      <span className="admin-field-optional">
+                        {dataLineCount} line{dataLineCount === 1 ? "" : "s"} below the header
+                      </span>
+                    ) : null}
+                  </span>
+                  <textarea
+                    className="admin-mono"
+                    value={csvContent}
+                    onChange={(e) => setCsvContent(e.target.value)}
+                    rows={8}
+                    placeholder={CSV_PLACEHOLDER}
+                    spellCheck={false}
+                    required
+                  />
+                </label>
+                <div className="admin-actions">
+                  <button
+                    type="submit"
+                    className={busy ? "admin-button admin-button-primary admin-button-busy" : "admin-button admin-button-primary"}
+                    disabled={busy || !csvContent.trim()}
+                  >
+                    {busy ? "Applying…" : "Apply"}
                   </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+                  {csvContent ? (
+                    <button
+                      type="button"
+                      className="admin-linkbutton"
+                      disabled={busy}
+                      onClick={() => {
+                        setCsvContent("");
+                        setFilename("");
+                      }}
+                    >
+                      Clear
+                    </button>
+                  ) : null}
+                </div>
+              </form>
+            </RequireRole>
+          </div>
+        </Card>
 
-      {rowsError ? <p className="admin-error">{rowsError}</p> : null}
+        <Card title="Format" id="import-format">
+          <div className="admin-card-body">
+            <p className="admin-muted">
+              One adjustment per line, with a header row. Amounts are BD with three decimals and are
+              parsed server-side.
+            </p>
+            <pre className="admin-secret">{CSV_PLACEHOLDER}</pre>
+            <p className="admin-muted">
+              Each row posts immediately when you press Apply. There is no preview step — check the
+              CSV in the spreadsheet it came from first.
+            </p>
+          </div>
+        </Card>
+      </div>
 
-      {openImportId ? (
-        <div>
-          <h3>Rows</h3>
+      <Card title="Past imports" id="import-history">
+        {listError ? (
+          <div className="admin-card-body">
+            <ErrorMessage>{listError}</ErrorMessage>
+          </div>
+        ) : null}
+        {rowsError ? (
+          <div className="admin-card-body">
+            <ErrorMessage>{rowsError}</ErrorMessage>
+          </div>
+        ) : null}
+        <div className="admin-table-wrap">
           <table className="admin-table">
             <thead>
               <tr>
-                <th>#</th>
-                <th>Merchant</th>
-                <th>CSV amount</th>
-                <th>Posted</th>
-                <th>Reason</th>
+                <th>Applied</th>
+                <th>File</th>
+                <th className="admin-num">Rows</th>
+                <th className="admin-num">
+                  <span className="admin-visually-hidden">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
-                <tr key={row.rowNumber}>
-                  <td>{row.rowNumber}</td>
-                  <td>{row.merchantId}</td>
-                  <td>
-                    <code>{row.rawAmountText}</code>
-                  </td>
-                  <td>{bhd(row.parsedAmountFils)}</td>
-                  <td>{row.reason ?? ""}</td>
-                </tr>
+              {imports.map((item) => (
+                <Fragment key={item.id}>
+                  <tr className={openImportId === item.id ? "is-expanded" : undefined}>
+                    <td className="admin-nowrap">{item.appliedAt}</td>
+                    <td>{item.originalFilename}</td>
+                    <td className="admin-num">{item.rowCount}</td>
+                    <td className="admin-num">
+                      <button
+                        type="button"
+                        className="admin-button admin-button-sm"
+                        aria-expanded={openImportId === item.id}
+                        onClick={() => void handleOpenRows(item.id)}
+                      >
+                        {openImportId === item.id ? "Hide rows" : "View rows"}
+                      </button>
+                    </td>
+                  </tr>
+                  {openImportId === item.id ? (
+                    <tr>
+                      <td className="admin-subtable-cell" colSpan={4}>
+                        <div className="admin-subtable admin-table-wrap">
+                          <table className="admin-table">
+                            <thead>
+                              <tr>
+                                <th className="admin-num">#</th>
+                                <th>Merchant</th>
+                                <th className="admin-num">CSV amount</th>
+                                <th className="admin-num">Posted</th>
+                                <th>Reason</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {rows.map((row) => (
+                                <tr key={row.rowNumber}>
+                                  <td className="admin-num">{row.rowNumber}</td>
+                                  <td>
+                                    <code>{row.merchantId}</code>
+                                  </td>
+                                  <td className="admin-num">
+                                    <code>{row.rawAmountText}</code>
+                                  </td>
+                                  <td className="admin-num admin-cell-strong">
+                                    <Money fils={row.parsedAmountFils} />
+                                  </td>
+                                  <td>{row.reason ?? ""}</td>
+                                </tr>
+                              ))}
+                              {rows.length === 0 ? <EmptyRow colSpan={5}>No rows.</EmptyRow> : null}
+                            </tbody>
+                          </table>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
               ))}
+              {imports.length === 0 ? <EmptyRow colSpan={4}>No imports yet.</EmptyRow> : null}
             </tbody>
           </table>
         </div>
-      ) : null}
+      </Card>
     </section>
   );
 }

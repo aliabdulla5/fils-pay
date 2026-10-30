@@ -1,19 +1,16 @@
 import { useState } from "react";
-import { formatBhd, toFils } from "@filspay/money";
 import { rebuildAnalytics, rebuildBalances, runBatch } from "../../api/settlement.js";
 import { recalculateMdr } from "../../api/mdrRecalculation.js";
 import { describeError } from "../../api/client.js";
 import { RequireRole } from "../../auth/RequireRole.js";
+import { IconAlert, IconCheck, IconRefresh } from "../../components/icons.js";
+import { Card, ErrorMessage, GateNote, Money, PageHeader, StatusBadge } from "../../components/ui.js";
 import type {
   AnalyticsRebuildSummary,
   BalanceRebuildSummary,
   MdrRecalcSummary,
   RunBatchSummary,
 } from "../../types.js";
-
-function bhd(fils: number): string {
-  return `${formatBhd(toFils(fils, { allowNegative: true }))} BHD`;
-}
 
 // The last completed Asia/Bahrain business day (UTC+3, no DST), whatever
 // the browser's zone. Local "yesterday" printed with toISOString() was a UTC
@@ -120,291 +117,455 @@ export function SettlementPage() {
 
   const runResults = runResult?.merchantResults ?? [];
   const mdrAdjusted = mdrResult?.adjusted ?? [];
+  const rebuildChanged = rebuildResult?.changed ?? [];
 
   return (
-    <section>
-      <h1>Settlement ops</h1>
-      <p className="admin-muted">
-        Every action below is money-adjacent and is gated server-side to the <code>finance</code>{" "}
-        and <code>super_admin</code> roles. Every invocation is written to the admin audit log before
-        it runs.
-      </p>
-
-      <h2>Re-run a daily batch</h2>
-      <p className="admin-muted">
-        Closes and pays out the batch for one business date. Running a date that is already closed or
-        paid is safe — the settlement service reports it as already-done rather than doing it twice.
-      </p>
-
-      {runError ? <p className="admin-error">{runError}</p> : null}
-
-      <RequireRole
-        allow={["finance", "super_admin"]}
-        fallback={
-          <p className="admin-muted">
-            Your role cannot trigger settlement runs. Ask a finance admin.
-          </p>
+    <section className="admin-page">
+      <PageHeader
+        title="Settlement ops"
+        description={
+          <>
+            Every action below is money-adjacent and is gated server-side to the <code>finance</code>{" "}
+            and <code>super_admin</code> roles. Every invocation is written to the admin audit log
+            before it runs.
+          </>
         }
-      >
-        <form className="admin-form" onSubmit={(e) => void handleRunBatch(e)}>
-          <label>
-            Business date
-            <input type="date" required value={date} onChange={(e) => setDate(e.target.value)} />
-          </label>
-          <label>
-            Merchant id (optional — leave blank to run every eligible merchant)
-            <input
-              type="text"
-              placeholder="00000000-0000-0000-0000-000000000000"
-              value={merchantId}
-              onChange={(e) => setMerchantId(e.target.value)}
-            />
-          </label>
-          <button type="submit" disabled={runBusy}>
-            {runBusy ? "Running..." : "Run batch"}
-          </button>
-        </form>
-      </RequireRole>
+      />
 
-      {runResult ? (
-        <div className="admin-notice">
-          <p>
-            Batch run for <strong>{runResult.businessDate}</strong> — {runResults.length} merchant
-            {runResults.length === 1 ? "" : "s"} processed.
-          </p>
-          {runResults.length > 0 ? (
-            <table className="admin-table">
-              <thead>
-                <tr>
-                  <th>Merchant</th>
-                  <th>Batch</th>
-                  <th>Gross</th>
-                  <th>Fee</th>
-                  <th>Net payout</th>
-                  <th>Already closed</th>
-                  <th>Already paid</th>
-                </tr>
-              </thead>
-              <tbody>
-                {runResults.map((outcome) => (
-                  <tr key={`${outcome.merchantId}-${outcome.batchId}`}>
-                    <td>
-                      <code>{outcome.merchantId}</code>
-                    </td>
-                    <td>
-                      <code>{outcome.batchId}</code>
-                    </td>
-                    <td>{bhd(outcome.grossFils)}</td>
-                    <td>{bhd(outcome.feeFils)}</td>
-                    <td>{bhd(outcome.netPayoutFils)}</td>
-                    <td>{outcome.alreadyClosed ? "yes" : "no"}</td>
-                    <td>{outcome.alreadyPaid ? "yes" : "no"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      <p className="admin-section-label">Per date and per merchant</p>
+      <div className="admin-grid-ops">
+        <Card
+          title="Re-run a daily batch"
+          id="op-run-batch"
+          aside={<OpState busy={runBusy} error={runError} done={runResult !== null} busyLabel="Running" />}
+        >
+          <div className="admin-card-body">
+            <p className="admin-muted">
+              Closes and pays out the batch for one business date. Running a date that is already
+              closed or paid is safe — the settlement service reports it as already-done rather than
+              doing it twice.
+            </p>
+
+            {runError ? <ErrorMessage>{runError}</ErrorMessage> : null}
+
+            <RequireRole
+              allow={["finance", "super_admin"]}
+              fallback={<GateNote>Your role cannot trigger settlement runs. Ask a finance admin.</GateNote>}
+            >
+              <form className="admin-form" onSubmit={(e) => void handleRunBatch(e)}>
+                <label className="admin-field">
+                  Business date
+                  <input type="date" required value={date} onChange={(e) => setDate(e.target.value)} />
+                </label>
+                <label className="admin-field">
+                  <span className="admin-field-label">
+                    Merchant id <span className="admin-field-optional">Optional</span>
+                  </span>
+                  <input
+                    type="text"
+                    placeholder="00000000-0000-0000-0000-000000000000"
+                    value={merchantId}
+                    onChange={(e) => setMerchantId(e.target.value)}
+                  />
+                  <span className="admin-field-hint">Leave blank to run every eligible merchant.</span>
+                </label>
+                <div>
+                  <button
+                    type="submit"
+                    className={runBusy ? "admin-button admin-button-primary admin-button-busy" : "admin-button admin-button-primary"}
+                    disabled={runBusy}
+                  >
+                    {runBusy ? "Running..." : "Run batch"}
+                  </button>
+                </div>
+              </form>
+            </RequireRole>
+          </div>
+
+          {runResult ? (
+            <div className="admin-card-body">
+              <div className="admin-result">
+                <div className="admin-result-head">
+                  <IconCheck />
+                  Batch run for {runResult.businessDate} — {runResults.length} merchant
+                  {runResults.length === 1 ? "" : "s"} processed.
+                </div>
+                {runResults.length > 0 ? (
+                  <div className="admin-result-body admin-table-wrap">
+                    <table className="admin-table">
+                      <thead>
+                        <tr>
+                          <th>Merchant</th>
+                          <th>Batch</th>
+                          <th className="admin-num">Gross</th>
+                          <th className="admin-num">Fee</th>
+                          <th className="admin-num">Net payout</th>
+                          <th>Already closed</th>
+                          <th>Already paid</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {runResults.map((outcome) => (
+                          <tr key={`${outcome.merchantId}-${outcome.batchId}`}>
+                            <td>
+                              <code>{outcome.merchantId}</code>
+                            </td>
+                            <td>
+                              <code>{outcome.batchId}</code>
+                            </td>
+                            <td className="admin-num">
+                              <Money fils={outcome.grossFils} />
+                            </td>
+                            <td className="admin-num">
+                              <Money fils={outcome.feeFils} />
+                            </td>
+                            <td className="admin-num admin-cell-strong">
+                              <Money fils={outcome.netPayoutFils} />
+                            </td>
+                            <td>{outcome.alreadyClosed ? "yes" : "no"}</td>
+                            <td>{outcome.alreadyPaid ? "yes" : "no"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+              </div>
+            </div>
           ) : null}
-        </div>
-      ) : null}
+        </Card>
 
-      <h2>Rebuild cached balances</h2>
-      <p className="admin-muted">
-        Recomputes every merchant&apos;s cached payable balance from <code>ledger_entries</code>, the
-        authoritative record. The ledger itself is only read, never written — but this touches every
-        merchant on the platform at once, so it asks before it runs.
-      </p>
-
-      {rebuildError ? <p className="admin-error">{rebuildError}</p> : null}
-
-      <RequireRole
-        allow={["finance", "super_admin"]}
-        fallback={
-          <p className="admin-muted">Your role cannot rebuild balances. Ask a finance admin.</p>
-        }
-      >
-        {confirmingRebuild ? (
-          <div className="admin-confirm">
-            <p>
-              <strong>Rebuild balances for every merchant?</strong> This recalculates all cached
-              payable balances and records the action in the admin audit log.
+        <Card
+          title="Recalculate MDR"
+          id="op-mdr"
+          aside={<OpState busy={mdrBusy} error={mdrError} done={mdrResult !== null} busyLabel="Recalculating" />}
+        >
+          <div className="admin-card-body">
+            <p className="admin-muted">
+              Re-derives one merchant&apos;s settlement-batch fees over a date range at their current
+              contracted rate, and posts a ledger adjustment for any difference. Finance runs this after
+              a rate change lands so historical batches reflect the same figure a fresh reconciliation
+              would show.
             </p>
-            <button type="button" disabled={rebuildBusy} onClick={() => void handleRebuild()}>
-              {rebuildBusy ? "Rebuilding..." : "Yes, rebuild all balances"}
-            </button>{" "}
-            <button type="button" disabled={rebuildBusy} onClick={() => setConfirmingRebuild(false)}>
-              Cancel
-            </button>
+            <RequireRole
+              allow={["finance", "super_admin"]}
+              fallback={<GateNote>Your role cannot run an MDR recalculation. Ask a finance admin.</GateNote>}
+            >
+              <form className="admin-form" onSubmit={(e) => void handleRecalculateMdr(e)}>
+                <label className="admin-field">
+                  Merchant id
+                  <input
+                    value={mdrMerchantId}
+                    onChange={(e) => setMdrMerchantId(e.target.value)}
+                    placeholder="merchant UUID"
+                    required
+                  />
+                </label>
+                <div className="admin-form-row">
+                  <label className="admin-field">
+                    From (inclusive)
+                    <input type="date" value={mdrFrom} onChange={(e) => setMdrFrom(e.target.value)} required />
+                  </label>
+                  <label className="admin-field">
+                    To (exclusive)
+                    <input type="date" value={mdrTo} onChange={(e) => setMdrTo(e.target.value)} required />
+                  </label>
+                </div>
+                <div>
+                  <button
+                    type="submit"
+                    className={mdrBusy ? "admin-button admin-button-primary admin-button-busy" : "admin-button admin-button-primary"}
+                    disabled={mdrBusy}
+                  >
+                    {mdrBusy ? "Recalculating…" : "Recalculate MDR"}
+                  </button>
+                </div>
+              </form>
+            </RequireRole>
+
+            {mdrError ? <ErrorMessage>{mdrError}</ErrorMessage> : null}
           </div>
-        ) : (
-          <button type="button" onClick={() => setConfirmingRebuild(true)}>
-            Rebuild balances
-          </button>
-        )}
-      </RequireRole>
 
-      {rebuildResult ? (
-        <div className="admin-notice">
-          <p>
-            Rebuilt {rebuildResult.rebuiltCount} balance
-            {rebuildResult.rebuiltCount === 1 ? "" : "s"};{" "}
-            {(rebuildResult.changed ?? []).length} changed.
-          </p>
-          {(rebuildResult.changed ?? []).length > 0 ? (
-            <table className="admin-table">
-              <thead>
-                <tr>
-                  <th>Merchant</th>
-                  <th>Before</th>
-                  <th>After</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(rebuildResult.changed ?? []).map((change) => (
-                  <tr key={change.merchantId}>
-                    <td>
-                      <code>{change.merchantId}</code>
-                    </td>
-                    <td>{bhd(change.before)}</td>
-                    <td>{bhd(change.after)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <p className="admin-muted">Every cached balance already matched the ledger.</p>
-          )}
-        </div>
-      ) : null}
+          {mdrResult ? (
+            <div className="admin-card-body">
+              <div className="admin-result">
+                <div className="admin-result-head">
+                  <IconCheck />
+                  Considered {mdrResult.batchesConsidered} batch(es); {mdrAdjusted.length} had a fee
+                  change.
+                </div>
+                <div className="admin-result-body">
+                  {mdrAdjusted.length > 0 ? (
+                    <div className="admin-table-wrap">
+                      <table className="admin-table">
+                        <thead>
+                          <tr>
+                            <th>Batch date</th>
+                            <th>Status</th>
+                            <th className="admin-num">Old fee</th>
+                            <th className="admin-num">New fee</th>
+                            <th className="admin-num">Difference</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {mdrAdjusted.map((adjustment) => (
+                            <tr key={adjustment.batchId}>
+                              <td className="admin-nowrap">{adjustment.batchDate}</td>
+                              <td>
+                                <StatusBadge status={adjustment.status} />
+                              </td>
+                              <td className="admin-num">
+                                <Money fils={adjustment.oldFeeFils} />
+                              </td>
+                              <td className="admin-num">
+                                <Money fils={adjustment.newFeeFils} />
+                              </td>
+                              <td className="admin-num admin-cell-strong">
+                                <Money fils={adjustment.diffFils} />
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="admin-muted">Every batch in range already matched the current rate.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </Card>
+      </div>
 
-      <h2>Rebuild analytics</h2>
-      <p className="admin-muted">
-        Recomputes the analytics read model — daily volumes and payout trends — from scratch, for
-        when a merchant reports their dashboard looking behind and you would rather not wait for the
-        reporting worker to catch up. Like the balance rebuild above, it touches every merchant at
-        once, so it asks before it runs.
-      </p>
-
-      {analyticsError ? <p className="admin-error">{analyticsError}</p> : null}
-
-      <RequireRole
-        allow={["finance", "super_admin"]}
-        fallback={
-          <p className="admin-muted">Your role cannot rebuild analytics. Ask a finance admin.</p>
-        }
-      >
-        {confirmingAnalytics ? (
-          <div className="admin-confirm">
-            <p>
-              <strong>Rebuild analytics for every merchant?</strong> This replaces both rollup tables
-              with a fresh recompute and records the action in the admin audit log.
+      <p className="admin-section-label">Platform-wide</p>
+      <div className="admin-grid-ops">
+        <Card
+          title="Rebuild cached balances"
+          id="op-rebuild-balances"
+          className="admin-card-danger"
+          aside={
+            <>
+              <span className="admin-tag admin-tag-warning">Affects every merchant</span>
+              <OpState
+                busy={rebuildBusy}
+                error={rebuildError}
+                done={rebuildResult !== null}
+                busyLabel="Rebuilding"
+              />
+            </>
+          }
+        >
+          <div className="admin-card-body">
+            <p className="admin-muted">
+              Recomputes every merchant&apos;s cached payable balance from <code>ledger_entries</code>,
+              the authoritative record. The ledger itself is only read, never written — but this
+              touches every merchant on the platform at once, so it asks before it runs.
             </p>
-            <button
-              type="button"
-              disabled={analyticsBusy}
-              onClick={() => void handleRebuildAnalytics()}
+
+            {rebuildError ? <ErrorMessage>{rebuildError}</ErrorMessage> : null}
+
+            <RequireRole
+              allow={["finance", "super_admin"]}
+              fallback={<GateNote>Your role cannot rebuild balances. Ask a finance admin.</GateNote>}
             >
-              {analyticsBusy ? "Rebuilding..." : "Yes, rebuild analytics"}
-            </button>{" "}
-            <button
-              type="button"
-              disabled={analyticsBusy}
-              onClick={() => setConfirmingAnalytics(false)}
-            >
-              Cancel
-            </button>
+              {confirmingRebuild ? (
+                <div className="admin-confirm">
+                  <span className="admin-confirm-title">
+                    <IconAlert />
+                    Rebuild balances for every merchant?
+                  </span>
+                  <p>
+                    This recalculates all cached payable balances and records the action in the admin
+                    audit log.
+                  </p>
+                  <div className="admin-actions">
+                    <button
+                      type="button"
+                      className={
+                        rebuildBusy
+                          ? "admin-button admin-button-danger-solid admin-button-busy"
+                          : "admin-button admin-button-danger-solid"
+                      }
+                      disabled={rebuildBusy}
+                      onClick={() => void handleRebuild()}
+                    >
+                      {rebuildBusy ? "Rebuilding..." : "Yes, rebuild all balances"}
+                    </button>
+                    <button
+                      type="button"
+                      className="admin-button"
+                      disabled={rebuildBusy}
+                      onClick={() => setConfirmingRebuild(false)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <button type="button" className="admin-button" onClick={() => setConfirmingRebuild(true)}>
+                    <IconRefresh />
+                    Rebuild balances
+                  </button>
+                </div>
+              )}
+            </RequireRole>
           </div>
-        ) : (
-          <button type="button" onClick={() => setConfirmingAnalytics(true)}>
-            Rebuild analytics
-          </button>
-        )}
-      </RequireRole>
 
-      {analyticsResult ? (
-        <div className="admin-notice">
-          <p>
-            Rebuilt {analyticsResult.volumeRows} daily-volume row
-            {analyticsResult.volumeRows === 1 ? "" : "s"} and {analyticsResult.trendRows} payout-trend
-            row{analyticsResult.trendRows === 1 ? "" : "s"}.
-          </p>
-        </div>
-      ) : null}
+          {rebuildResult ? (
+            <div className="admin-card-body">
+              <div className="admin-result">
+                <div className="admin-result-head">
+                  <IconCheck />
+                  Rebuilt {rebuildResult.rebuiltCount} balance
+                  {rebuildResult.rebuiltCount === 1 ? "" : "s"}; {rebuildChanged.length} changed.
+                </div>
+                <div className="admin-result-body">
+                  {rebuildChanged.length > 0 ? (
+                    <div className="admin-table-wrap">
+                      <table className="admin-table">
+                        <thead>
+                          <tr>
+                            <th>Merchant</th>
+                            <th className="admin-num">Before</th>
+                            <th className="admin-num">After</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rebuildChanged.map((change) => (
+                            <tr key={change.merchantId}>
+                              <td>
+                                <code>{change.merchantId}</code>
+                              </td>
+                              <td className="admin-num">
+                                <Money fils={change.before} />
+                              </td>
+                              <td className="admin-num admin-cell-strong">
+                                <Money fils={change.after} />
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="admin-muted">Every cached balance already matched the ledger.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </Card>
 
-      <h2>Recalculate MDR</h2>
-      <p className="admin-muted">
-        Re-derives one merchant&apos;s settlement-batch fees over a date range at their current
-        contracted rate, and posts a ledger adjustment for any difference. Finance runs this after a
-        rate change lands so historical batches reflect the same figure a fresh reconciliation would
-        show.
-      </p>
-      <RequireRole
-        allow={["finance", "super_admin"]}
-        fallback={
-          <p className="admin-muted">
-            Your role cannot run an MDR recalculation. Ask a finance admin.
-          </p>
-        }
-      >
-        <form className="admin-form" onSubmit={(e) => void handleRecalculateMdr(e)}>
-          <label>
-            Merchant id
-            <input
-              value={mdrMerchantId}
-              onChange={(e) => setMdrMerchantId(e.target.value)}
-              placeholder="merchant UUID"
-              required
-            />
-          </label>
-          <label>
-            From (inclusive)
-            <input type="date" value={mdrFrom} onChange={(e) => setMdrFrom(e.target.value)} required />
-          </label>
-          <label>
-            To (exclusive)
-            <input type="date" value={mdrTo} onChange={(e) => setMdrTo(e.target.value)} required />
-          </label>
-          <button type="submit" disabled={mdrBusy}>
-            {mdrBusy ? "Recalculating…" : "Recalculate MDR"}
-          </button>
-        </form>
-      </RequireRole>
+        <Card
+          title="Rebuild analytics"
+          id="op-rebuild-analytics"
+          className="admin-card-danger"
+          aside={
+            <>
+              <span className="admin-tag admin-tag-warning">Affects every merchant</span>
+              <OpState
+                busy={analyticsBusy}
+                error={analyticsError}
+                done={analyticsResult !== null}
+                busyLabel="Rebuilding"
+              />
+            </>
+          }
+        >
+          <div className="admin-card-body">
+            <p className="admin-muted">
+              Recomputes the analytics read model — daily volumes and payout trends — from scratch, for
+              when a merchant reports their dashboard looking behind and you would rather not wait for
+              the reporting worker to catch up. Like the balance rebuild, it touches every merchant at
+              once, so it asks before it runs.
+            </p>
 
-      {mdrError ? <p className="admin-error">{mdrError}</p> : null}
+            {analyticsError ? <ErrorMessage>{analyticsError}</ErrorMessage> : null}
 
-      {mdrResult ? (
-        <div>
-          <p>
-            Considered {mdrResult.batchesConsidered} batch(es); {mdrAdjusted.length} had a fee
-            change.
-          </p>
-          {mdrAdjusted.length > 0 ? (
-            <table className="admin-table">
-              <thead>
-                <tr>
-                  <th>Batch date</th>
-                  <th>Status</th>
-                  <th>Old fee</th>
-                  <th>New fee</th>
-                  <th>Difference</th>
-                </tr>
-              </thead>
-              <tbody>
-                {mdrAdjusted.map((adjustment) => (
-                  <tr key={adjustment.batchId}>
-                    <td>{adjustment.batchDate}</td>
-                    <td>{adjustment.status}</td>
-                    <td>{bhd(adjustment.oldFeeFils)}</td>
-                    <td>{bhd(adjustment.newFeeFils)}</td>
-                    <td>{bhd(adjustment.diffFils)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <p className="admin-muted">Every batch in range already matched the current rate.</p>
-          )}
-        </div>
-      ) : null}
+            <RequireRole
+              allow={["finance", "super_admin"]}
+              fallback={<GateNote>Your role cannot rebuild analytics. Ask a finance admin.</GateNote>}
+            >
+              {confirmingAnalytics ? (
+                <div className="admin-confirm">
+                  <span className="admin-confirm-title">
+                    <IconAlert />
+                    Rebuild analytics for every merchant?
+                  </span>
+                  <p>
+                    This replaces both rollup tables with a fresh recompute and records the action in
+                    the admin audit log.
+                  </p>
+                  <div className="admin-actions">
+                    <button
+                      type="button"
+                      className={
+                        analyticsBusy
+                          ? "admin-button admin-button-danger-solid admin-button-busy"
+                          : "admin-button admin-button-danger-solid"
+                      }
+                      disabled={analyticsBusy}
+                      onClick={() => void handleRebuildAnalytics()}
+                    >
+                      {analyticsBusy ? "Rebuilding..." : "Yes, rebuild analytics"}
+                    </button>
+                    <button
+                      type="button"
+                      className="admin-button"
+                      disabled={analyticsBusy}
+                      onClick={() => setConfirmingAnalytics(false)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <button type="button" className="admin-button" onClick={() => setConfirmingAnalytics(true)}>
+                    <IconRefresh />
+                    Rebuild analytics
+                  </button>
+                </div>
+              )}
+            </RequireRole>
+          </div>
+
+          {analyticsResult ? (
+            <div className="admin-card-body">
+              <div className="admin-result">
+                <div className="admin-result-head">
+                  <IconCheck />
+                  Rebuilt {analyticsResult.volumeRows} daily-volume row
+                  {analyticsResult.volumeRows === 1 ? "" : "s"} and {analyticsResult.trendRows}{" "}
+                  payout-trend row{analyticsResult.trendRows === 1 ? "" : "s"}.
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </Card>
+      </div>
     </section>
   );
+}
+
+/** The header badge on each operation card: what the last invocation on
+ *  this screen is doing or did. Display only — reflects the handler's own
+ *  busy/error/result state. */
+function OpState({
+  busy,
+  error,
+  done,
+  busyLabel,
+}: {
+  busy: boolean;
+  error: string | null;
+  done: boolean;
+  busyLabel: string;
+}) {
+  if (busy) return <span className="admin-badge admin-badge-warning admin-badge-processing">{busyLabel}</span>;
+  if (error) return <StatusBadge status="failed" />;
+  if (done) return <StatusBadge status="succeeded" label="Completed" />;
+  return null;
 }

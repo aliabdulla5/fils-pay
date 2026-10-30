@@ -4,6 +4,16 @@ import { listMerchants } from "../../api/merchants.js";
 import { bulkApproveKyc } from "../../api/merchantsBulk.js";
 import { describeError } from "../../api/client.js";
 import { RequireRole } from "../../auth/RequireRole.js";
+import { IconSearch } from "../../components/icons.js";
+import {
+  EmptyRow,
+  ErrorMessage,
+  Loading,
+  Notice,
+  PageHeader,
+  StatusBadge,
+  statusLabel,
+} from "../../components/ui.js";
 import type { AdminMerchantSummary, MerchantOnboardingStatus } from "../../types.js";
 
 const ONBOARDING_STATUSES: MerchantOnboardingStatus[] = [
@@ -101,120 +111,166 @@ export function MerchantListPage() {
   const allLoadedSelected = merchants.length > 0 && selectedIds.size === merchants.length;
 
   return (
-    <section>
-      <h1>Merchants</h1>
+    <section className="admin-page">
+      <PageHeader
+        title="Merchants"
+        description="Every merchant on the platform. Search by name, merchant id or contact email."
+      />
 
-      <form
-        className="admin-form admin-form-inline"
-        onSubmit={(e) => {
-          e.preventDefault();
-          setAppliedQuery(query.trim());
-        }}
-      >
-        <label>
-          Search
-          <input
-            type="search"
-            placeholder="Display name, merchant id, or contact email"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </label>
-        <button type="submit">Search</button>
-      </form>
+      {error ? <ErrorMessage>{error}</ErrorMessage> : null}
+      {bulkNotice ? <Notice>{bulkNotice}</Notice> : null}
 
-      <fieldset className="admin-filters">
-        <legend>Onboarding status</legend>
-        {ONBOARDING_STATUSES.map((status) => (
-          <label key={status}>
-            <input
-              type="checkbox"
-              checked={statuses.includes(status)}
-              onChange={() => toggleStatus(status)}
-            />
-            {status}
-          </label>
-        ))}
-      </fieldset>
-
-      {error ? <p className="admin-error">{error}</p> : null}
-      {bulkNotice ? <p className="admin-muted">{bulkNotice}</p> : null}
-
-      {selectedIds.size > 0 ? (
-        <div className="admin-form admin-form-inline">
-          <span>{selectedIds.size} selected</span>
-          <RequireRole allow={["finance", "super_admin"]}>
-            <button type="button" disabled={bulkBusy} onClick={() => void approveSelected()}>
-              Bulk approve KYC
-            </button>
-          </RequireRole>
-          <button type="button" disabled={bulkBusy} onClick={() => setSelectedIds(new Set())}>
-            Clear selection
-          </button>
-        </div>
-      ) : null}
-
-      <table className="admin-table">
-        <thead>
-          <tr>
-            <th>
+      <div className="admin-card">
+        <form
+          className="admin-toolbar"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setAppliedQuery(query.trim());
+          }}
+        >
+          <label className="admin-field admin-field-grow">
+            Search
+            <span className="admin-input-affix">
+              <IconSearch />
               <input
-                type="checkbox"
-                aria-label="Select all loaded merchants"
-                checked={allLoadedSelected}
-                disabled={merchants.length === 0}
-                onChange={toggleSelectAllLoaded}
+                type="search"
+                placeholder="Display name, merchant id, or contact email"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
               />
-            </th>
-            <th>Merchant</th>
-            <th>Status</th>
-            <th>Onboarding</th>
-            <th>KYC</th>
-            <th>MDR</th>
-            <th>Mode</th>
-            <th>Created</th>
-          </tr>
-        </thead>
-        <tbody>
-          {merchants.map((merchant) => (
-            <tr key={merchant.id}>
-              <td>
+            </span>
+          </label>
+          <button type="submit" className="admin-button admin-button-primary">
+            Search
+          </button>
+        </form>
+
+        <div className="admin-filters-bar">
+          <fieldset className="admin-filters">
+            <legend>Onboarding status</legend>
+            {ONBOARDING_STATUSES.map((status) => (
+              <label key={status} className="admin-chip">
                 <input
                   type="checkbox"
-                  aria-label={`Select ${merchant.displayName}`}
-                  checked={selectedIds.has(merchant.id)}
-                  onChange={() => toggleSelected(merchant.id)}
+                  checked={statuses.includes(status)}
+                  onChange={() => toggleStatus(status)}
                 />
-              </td>
-              <td>
-                <Link to={`/merchants/${merchant.id}`}>{merchant.displayName}</Link>
-                <div className="admin-muted">
-                  <code>{merchant.id}</code>
-                </div>
-              </td>
-              <td>{merchant.status}</td>
-              <td>{merchant.onboardingStatus}</td>
-              <td>{merchant.kycPassed ? "passed" : "not passed"}</td>
-              <td>{(merchant.mdrBps / 100).toFixed(2)}%</td>
-              <td>{merchant.testMode ? "test" : "live"}</td>
-              <td>{new Date(merchant.createdAt).toLocaleDateString()}</td>
-            </tr>
-          ))}
-          {merchants.length === 0 && !loading ? (
-            <tr>
-              <td colSpan={8}>No merchants match this search.</td>
-            </tr>
+                {statusLabel(status)}
+              </label>
+            ))}
+          </fieldset>
+        </div>
+
+        {selectedIds.size > 0 ? (
+          <div className="admin-bulkbar" role="region" aria-label="Bulk actions">
+            <span>{selectedIds.size} selected</span>
+            <RequireRole allow={["finance", "super_admin"]}>
+              <button
+                type="button"
+                className="admin-button admin-button-sm admin-button-primary"
+                disabled={bulkBusy}
+                onClick={() => void approveSelected()}
+              >
+                Bulk approve KYC
+              </button>
+            </RequireRole>
+            <button
+              type="button"
+              className="admin-button admin-button-sm"
+              disabled={bulkBusy}
+              onClick={() => setSelectedIds(new Set())}
+            >
+              Clear selection
+            </button>
+          </div>
+        ) : null}
+
+        <div className="admin-table-wrap">
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th className="admin-check-cell">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all loaded merchants"
+                    checked={allLoadedSelected}
+                    disabled={merchants.length === 0}
+                    onChange={toggleSelectAllLoaded}
+                  />
+                </th>
+                <th>Merchant</th>
+                <th>Status</th>
+                <th>Onboarding</th>
+                <th>KYC</th>
+                <th className="admin-num">MDR</th>
+                <th>Mode</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {merchants.map((merchant) => (
+                <tr key={merchant.id} className={selectedIds.has(merchant.id) ? "is-selected" : undefined}>
+                  <td className="admin-check-cell">
+                    <input
+                      type="checkbox"
+                      aria-label={`Select ${merchant.displayName}`}
+                      checked={selectedIds.has(merchant.id)}
+                      onChange={() => toggleSelected(merchant.id)}
+                    />
+                  </td>
+                  <td>
+                    <Link to={`/merchants/${merchant.id}`}>{merchant.displayName}</Link>
+                    <span className="admin-cell-sub">
+                      <code>{merchant.id}</code>
+                    </span>
+                  </td>
+                  <td>
+                    <StatusBadge status={merchant.status} />
+                  </td>
+                  <td>
+                    <StatusBadge status={merchant.onboardingStatus} />
+                  </td>
+                  <td>
+                    <StatusBadge
+                      status={merchant.kycPassed ? "passed" : "not_passed"}
+                      label={merchant.kycPassed ? "passed" : "not passed"}
+                    />
+                  </td>
+                  <td className="admin-num">{(merchant.mdrBps / 100).toFixed(2)}%</td>
+                  <td>
+                    <StatusBadge
+                      status={merchant.testMode ? "test" : "live"}
+                      label={merchant.testMode ? "test" : "live"}
+                    />
+                  </td>
+                  <td className="admin-nowrap">{new Date(merchant.createdAt).toLocaleDateString()}</td>
+                </tr>
+              ))}
+              {merchants.length === 0 && !loading ? (
+                <EmptyRow colSpan={8}>No merchants match this search.</EmptyRow>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+
+        {loading ? <Loading /> : null}
+
+        <div className="admin-list-footer">
+          <span>
+            {merchants.length} merchant{merchants.length === 1 ? "" : "s"} loaded
+          </span>
+          {nextCursor ? (
+            <button
+              type="button"
+              className="admin-button admin-button-sm"
+              disabled={loading}
+              onClick={() => void load(nextCursor)}
+            >
+              Load more
+            </button>
           ) : null}
-        </tbody>
-      </table>
-
-      {loading ? <p>Loading...</p> : null}
-
-      {nextCursor ? (
-        <button type="button" disabled={loading} onClick={() => void load(nextCursor)}>
-          Load more
-        </button>
-      ) : null}
+        </div>
+      </div>
     </section>
   );
 }

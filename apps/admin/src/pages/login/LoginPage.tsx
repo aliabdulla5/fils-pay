@@ -3,6 +3,8 @@ import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { login, verifyOtp } from "../../api/auth.js";
 import { describeError } from "../../api/client.js";
 import { useAdminAuth } from "../../auth/AdminAuthContext.js";
+import { BrandMark, IconLock } from "../../components/icons.js";
+import { ErrorMessage } from "../../components/ui.js";
 import type { AdminLoginResponse } from "../../types.js";
 
 type Step =
@@ -69,76 +71,124 @@ export function LoginPage() {
     }
   }
 
+  const onOtpStep = step.kind === "otp";
+
   return (
-    <main className="admin-centered">
-      <h1>FilsPay Admin</h1>
-      <p className="admin-muted">Internal operations console.</p>
+    <main className="admin-auth">
+      <div className="admin-brand">
+        <BrandMark />
+        <span className="admin-brand-name">FilsPay</span>
+        <span className="admin-brand-tag">Admin</span>
+      </div>
 
-      {error ? <p className="admin-error">{error}</p> : null}
-
-      {step.kind === "credentials" ? (
-        <form onSubmit={(e) => void handleCredentials(e)} className="admin-form">
-          <label>
-            Email
-            <input
-              type="email"
-              autoComplete="username"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-          </label>
-          <label>
-            Password
-            <input
-              type="password"
-              autoComplete="current-password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </label>
-          <button type="submit" disabled={submitting}>
-            {submitting ? "Signing in..." : "Continue"}
-          </button>
-        </form>
-      ) : (
-        <form onSubmit={(e) => void handleOtp(e)} className="admin-form">
-          <p>
-            A one-time code was issued for <strong>{email}</strong>. It expires at{" "}
-            {new Date(step.challenge.otpExpiresAt).toLocaleTimeString()}.
-          </p>
-          {step.challenge.devOtpCode ? (
-            <p className="admin-muted">
-              Development code: <code>{step.challenge.devOtpCode}</code>
-            </p>
-          ) : null}
-          <label>
-            One-time code
-            <input
-              type="text"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              required
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-            />
-          </label>
-          <button type="submit" disabled={submitting}>
-            {submitting ? "Verifying..." : "Verify"}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setStep({ kind: "credentials" });
-              setCode("");
-              setError(null);
-            }}
+      <div className="admin-auth-card">
+        <ol className="admin-steps" aria-label="Sign-in progress">
+          <li
+            className={onOtpStep ? "admin-step is-done" : "admin-step is-current"}
+            aria-current={onOtpStep ? undefined : "step"}
           >
-            Start over
-          </button>
-        </form>
-      )}
+            Staff credentials
+          </li>
+          <li
+            className={onOtpStep ? "admin-step is-current" : "admin-step"}
+            aria-current={onOtpStep ? "step" : undefined}
+          >
+            Verification code
+          </li>
+        </ol>
+
+        <div className="admin-auth-head">
+          <h1>{onOtpStep ? "Check your code" : "Sign in to the admin console"}</h1>
+          {step.kind === "otp" ? (
+            <p>
+              A one-time code was issued for <strong>{email}</strong>. It expires at{" "}
+              {new Date(step.challenge.otpExpiresAt).toLocaleTimeString()}.
+            </p>
+          ) : (
+            <p>Internal operations console.</p>
+          )}
+        </div>
+
+        {error ? <ErrorMessage>{error}</ErrorMessage> : null}
+
+        {step.kind === "credentials" ? (
+          <form onSubmit={(e) => void handleCredentials(e)} className="admin-form">
+            <label className="admin-field">
+              Email
+              <input
+                type="email"
+                autoComplete="username"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </label>
+            <label className="admin-field">
+              Password
+              <input
+                type="password"
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </label>
+            <button
+              type="submit"
+              className="admin-button admin-button-primary admin-button-block"
+              disabled={submitting}
+            >
+              {submitting ? "Signing in..." : "Continue"}
+            </button>
+          </form>
+        ) : (
+          <form onSubmit={(e) => void handleOtp(e)} className="admin-form">
+            {step.challenge.devOtpCode ? (
+              <p className="admin-dev-code">
+                Development code: <code>{step.challenge.devOtpCode}</code>
+              </p>
+            ) : null}
+            <label className="admin-field">
+              One-time code
+              <input
+                className="admin-otp"
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                required
+                autoFocus
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+              />
+            </label>
+            <button
+              type="submit"
+              className="admin-button admin-button-primary admin-button-block"
+              disabled={submitting}
+            >
+              {submitting ? "Verifying..." : "Verify"}
+            </button>
+            <div>
+              <button
+                type="button"
+                className="admin-linkbutton"
+                onClick={() => {
+                  setStep({ kind: "credentials" });
+                  setCode("");
+                  setError(null);
+                }}
+              >
+                Start over
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+
+      <p className="admin-auth-foot">
+        <IconLock />
+        Staff only. Every sign-in is confirmed with a one-time code.
+      </p>
     </main>
   );
 }
