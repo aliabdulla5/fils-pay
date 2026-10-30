@@ -34,6 +34,11 @@ func mustLoadLocation(name string) *time.Location {
 	return loc
 }
 
+// BusinessDayLocation is the business day's timezone, for callers that must
+// turn an instant into a business-day calendar date before calling
+// BusinessDayWindow (which uses the date as given, in its own location).
+func BusinessDayLocation() *time.Location { return businessDayLocation }
+
 // BusinessDayWindow returns the [start, end) UTC instants bounding the
 // given calendar date's Asia/Bahrain business day, i.e. Asia/Bahrain
 // 00:00:00 on `date` through Asia/Bahrain 00:00:00 on `date`+1.

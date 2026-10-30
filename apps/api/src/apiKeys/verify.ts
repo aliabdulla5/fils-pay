@@ -13,11 +13,27 @@ export interface ApiKeyContext {
  *  addition to) a browser session, e.g. merchant-facing (non-dashboard) API
  *  endpoints. */
 // MK: revoked_at IS NULL is in the query, so a revoke is instant
+//
+// Rotation (admin/apiKeys.ts) issues a replacement but leaves the old key
+// unrevoked so the merchant can switch over — and nothing ever ended that
+// overlap: a key rotated because it leaked kept working forever. A key that
+// has been superseded by a rotation stops authenticating once the
+// replacement is older than the grace window.
+const ROTATION_GRACE = "24 hours";
+
 export async function verifyApiKey(pool: Pool, rawKey: string): Promise<ApiKeyContext | null> {
   const keyHash = sha256Hex(rawKey);
   const result = await pool.query<{ id: string; merchant_id: string }>(
-    `SELECT id, merchant_id FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL`,
-    [keyHash],
+    `SELECT k.id, k.merchant_id
+       FROM api_keys k
+      WHERE k.key_hash = $1
+        AND k.revoked_at IS NULL
+        AND NOT EXISTS (
+              SELECT 1 FROM api_keys r
+               WHERE r.rotated_from_key_id = k.id
+                 AND r.created_at < now() - $2::interval
+            )`,
+    [keyHash, ROTATION_GRACE],
   );
   const row = result.rows[0];
   if (!row) return null;

@@ -5,9 +5,10 @@
 # opens its own database connection; they call apps/api over HTTP.
 #
 #
-# The hosted demo box runs this same file. Service settings that aren't
-# listed under each service's `environment:` come from ops/.env.docker,
-# which compose picks up automatically. — AM, July
+# The hosted demo box runs this same file. Compose does NOT load
+# ops/.env.docker into the services (there is no env_file); a `.env` next to
+# this file only feeds the ${VAR} interpolation below. Secrets come from the
+# environment — copy ops/.env.docker.example, never commit the real file.
 #
 # — M?: Dockerfile.node / Dockerfile.go live next to this file. if they're
 # missing for you, pull main again.
@@ -51,11 +52,15 @@ services:
       postgres:
         condition: service_healthy
 
-  # One-off: deterministic seed data. Re-run any time; db/seed/index.ts
-  # resets and regenerates from scratch on every invocation.
-  # AM: the seed only truncates its own fixture tables, so pointing this at a
-  # shared database is fine. MK: correct. (see RUNBOOK)
+  # One-off: deterministic seed data. db/seed/generate.ts TRUNCATEs
+  # ledger_entries, transactions, merchants, outbox_events, admin_users, …
+  # RESTART IDENTITY CASCADE and regenerates fixtures — it wipes every
+  # ledger and merchant row, and recreates the fixture admin accounts. It
+  # used to start with every `docker compose up`, i.e. on every deploy of
+  # the hosted box. Opt-in only now, never against a real database:
+  #   docker compose --profile seed run --rm seed
   seed:
+    profiles: ["seed"]
     build:
       context: ..
       dockerfile: ops/Dockerfile.node
@@ -84,6 +89,17 @@ services:
       DATABASE_URL: postgres://filspay:filspay_dev_password@postgres:5432/filspay?sslmode=disable
       # TODO(YA, Jan): give the api its own role before anything is hosted.
       SETTLEMENT_INTERNAL_URL: http://settlement:8091
+      # Fail closed. Unset, NODE_ENV fell back to the image's "development":
+      # the hosted box returned devOtpCode on every login (the login page
+      # prints it), accepted unsigned acquirer callbacks, used the built-in
+      # dev webhook key and sent non-Secure cookies. Production refuses to
+      # boot without its secrets. For a laptop, put NODE_ENV=development in
+      # ops/.env (see .env.docker.example).
+      NODE_ENV: ${NODE_ENV:-production}
+      # Must match the settlement service's token; there is no dev fallback.
+      SETTLEMENT_INTERNAL_TOKEN: ${SETTLEMENT_INTERNAL_TOKEN:-local-dev-token}
+      ACQUIRER_CALLBACK_SIGNING_SECRET: ${ACQUIRER_CALLBACK_SIGNING_SECRET:-}
+      WEBHOOK_SECRET_ENCRYPTION_KEY: ${WEBHOOK_SECRET_ENCRYPTION_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -98,6 +114,7 @@ services:
     command: ["./settlement", "daemon"]
     environment:
       DATABASE_URL: postgres://filspay:filspay_dev_password@postgres:5432/filspay?sslmode=disable
+      SETTLEMENT_INTERNAL_TOKEN: ${SETTLEMENT_INTERNAL_TOKEN:-local-dev-token}
       # Batch close and scheme export get their own pool so a long close
       # can't starve the API's connections.
       # AM: PGCONN_SETTLEMENT is ignored while DATABASE_URL is set; kept for the

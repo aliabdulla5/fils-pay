@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
-import { applyRateFils, toFils } from "@filspay/money";
+import { applyRateFils, compareFils, parseBhdToFils, subtractFils, toFils } from "@filspay/money";
 import { withTransaction } from "../db/withTransaction.js";
 import { BadRequestError } from "../lib/errors.js";
 
@@ -10,18 +10,25 @@ import { BadRequestError } from "../lib/errors.js";
  * pricing dashboard) into fils for the ledger adjustment.
  */
 export function parsePromotionalDiscountFils(raw: string): number {
-  const parsed = parseFloat(raw);
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  // BD has three decimals: parseFloat(raw) * 100 read "4.75" as 475 fils,
+  // a tenth of the real value, and went through a float on the way.
+  let parsed: number;
+  try {
+    parsed = parseBhdToFils(raw);
+  } catch {
     throw new BadRequestError("invalid_discount", `could not parse discount amount "${raw}"`);
   }
-  return Math.round(parsed * 100);
+  if (parsed < 0) {
+    throw new BadRequestError("invalid_discount", `could not parse discount amount "${raw}"`);
+  }
+  return parsed;
 }
 
 /**
  * Applies a merchant's negotiated processing discount against the MDR fee
- * capture.ts already charged, per the merchant's pricing agreement: the
- * discount applies to our processing fee, after it's calculated — see the
- * partner-pricing addendum. capture.ts's own response doesn't carry the
+ * capture.ts already charged. The discount reduces the amount the MDR is
+ * charged on (ARCHITECTURE.md, discounted_fee.go), not the fee after it is
+ * calculated. capture.ts's own response doesn't carry the
  * fee it just charged, so this reads it back from the transaction_events
  * row capture.ts already wrote (its `metadata.feeFils`), then reverses the
  * merchant's share via a same-day ledger adjustment.
@@ -36,8 +43,8 @@ export async function applyCaptureDiscountAdjustment(
   input: { merchantId: string; transactionId: string },
 ): Promise<void> {
   return withTransaction(pool, async (client) => {
-    const merchantRow = await client.query<{ negotiated_discount_bps: number }>(
-      `SELECT negotiated_discount_bps FROM merchants WHERE id = $1`,
+    const merchantRow = await client.query<{ negotiated_discount_bps: number; mdr_bps: number }>(
+      `SELECT negotiated_discount_bps, mdr_bps FROM merchants WHERE id = $1`,
       [input.merchantId],
     );
     const discountBps = merchantRow.rows[0]?.negotiated_discount_bps ?? 0;
@@ -61,17 +68,28 @@ export async function applyCaptureDiscountAdjustment(
     const counts = countRow.rows[0];
     if (counts && Number(counts.adjustments) >= Number(counts.capture_events)) return;
 
-    const eventRow = await client.query<{ metadata: { feeFils?: number } }>(
-      `SELECT metadata FROM transaction_events
+    const eventRow = await client.query<{ amount_fils: string; metadata: { feeFils?: number; mdrBps?: number } }>(
+      `SELECT amount_fils, metadata FROM transaction_events
         WHERE transaction_id = $1 AND event_type IN ('captured', 'partially_captured')
         ORDER BY occurred_at DESC, id DESC LIMIT 1`,
       [input.transactionId],
     );
-    const feeBeforeDiscount = toFils(eventRow.rows[0]?.metadata?.feeFils ?? 0);
-    if (feeBeforeDiscount <= 0) return;
+    const event = eventRow.rows[0];
+    const feeBeforeDiscount = toFils(event?.metadata?.feeFils ?? 0);
+    if (!event || feeBeforeDiscount <= 0) return;
 
-    const discountFils = applyRateFils(feeBeforeDiscount, discountBps);
-    if (discountFils <= 0) return;
+    // ARCHITECTURE.md: "Discounts reduce the amount the MDR is charged on" —
+    // the order settlement's ComputeSettlementFee (discounted_fee.go) uses.
+    // Discounting the already-rounded fee instead rounds differently (602
+    // fils at 275 bps / 12.5%: fee-first nets 15, amount-first nets 14), so
+    // the ledger and the settlement batch disagreed by a fils on such
+    // captures and reconciliation never tied. The adjustment is whatever
+    // brings the charged fee down to the settlement figure.
+    const amountFils = toFils(Number(event.amount_fils));
+    const mdrBps = event.metadata?.mdrBps ?? merchantRow.rows[0]?.mdr_bps ?? 0;
+    const settlementFee = applyRateFils(subtractFils(amountFils, applyRateFils(amountFils, discountBps)), mdrBps);
+    if (compareFils(settlementFee, feeBeforeDiscount) >= 0) return;
+    const discountFils = subtractFils(feeBeforeDiscount, settlementFee);
 
     const entryGroupId = randomUUID();
     await client.query(

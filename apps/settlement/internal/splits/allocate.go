@@ -95,14 +95,24 @@ func PayoutSplitBatch(ctx context.Context, db *pgxpool.Pool, batchID uuid.UUID) 
 			rows.Close()
 			return SplitPayoutResult{}, err
 		}
-		share := money.ApplyRateFils(money.Fils(netPayout), weightBps)
-		shares = append(shares, ChildShare{ChildMerchantID: childID, WeightBps: weightBps, AllocatedFils: share})
+		shares = append(shares, ChildShare{ChildMerchantID: childID, WeightBps: weightBps})
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
 		return SplitPayoutResult{}, err
 	}
 	rows.Close()
+
+	// Allocate all children together so the shares sum to the net payout
+	// exactly. Rounding each share independently (ApplyRateFils per child)
+	// left fils unpaid — or overpaid — on every split batch.
+	weights := make([]ChildWeight, len(shares))
+	for i, s := range shares {
+		weights[i] = ChildWeight{WeightBps: s.WeightBps}
+	}
+	for i, amount := range ChildShares(money.Fils(netPayout), weights) {
+		shares[i].AllocatedFils = amount
+	}
 
 	var totalAllocated money.Fils
 	for _, s := range shares {

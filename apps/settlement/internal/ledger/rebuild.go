@@ -67,6 +67,7 @@ func RebuildAllBalances(ctx context.Context, db *pgxpool.Pool) (map[uuid.UUID]Re
 			UNION
 			SELECT merchant_id FROM merchant_balances
 		) merchants
+		ORDER BY merchant_id
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("ledger: RebuildAllBalances: select merchant ids: %w", err)
@@ -86,13 +87,28 @@ func RebuildAllBalances(ctx context.Context, db *pgxpool.Pool) (map[uuid.UUID]Re
 	}
 	rows.Close()
 
-	// TODO: lock merchant_balances rows first, a concurrent CloseBatch increment gets clobbered -- YA
 	diffs := make(map[uuid.UUID]RebuildDiff, len(merchantIDs))
 
 	for _, merchantID := range merchantIDs {
+		// Serialize with CloseBatch's incremental balance update. Creating a
+		// zero row also gives merchants with no cache row a lock to coordinate
+		// on. If CloseBatch has already locked the row, this waits for its
+		// ledger and cache changes to commit before the sum below; if this
+		// rebuild locks first, CloseBatch's ledger remains uncommitted until
+		// its cache increment can proceed, so the rebuild does not count it
+		// and the later increment applies exactly once.
+		_, err := tx.Exec(ctx, `
+			INSERT INTO merchant_balances (merchant_id, cached_payable_fils, updated_at)
+			VALUES ($1, 0, now())
+			ON CONFLICT (merchant_id) DO NOTHING
+		`, merchantID)
+		if err != nil {
+			return nil, fmt.Errorf("ledger: RebuildAllBalances: ensure cache row for %s: %w", merchantID, err)
+		}
+
 		var cachedBefore int64
-		err := tx.QueryRow(ctx, `
-			SELECT COALESCE(cached_payable_fils, 0) FROM merchant_balances WHERE merchant_id = $1
+		err = tx.QueryRow(ctx, `
+			SELECT COALESCE(cached_payable_fils, 0) FROM merchant_balances WHERE merchant_id = $1 FOR UPDATE
 		`, merchantID).Scan(&cachedBefore)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("ledger: RebuildAllBalances: read cached balance for %s: %w", merchantID, err)

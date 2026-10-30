@@ -59,6 +59,8 @@ export async function acquirerCallbackRoutes(app: FastifyInstance): Promise<void
       getSignatureHeader(request),
       app.config.acquirerCallbackSigningSecret,
       app.config.acquirerCallbackRequireSignature,
+      // Strict mode (the production default) also bounds replay.
+      app.config.acquirerCallbackRequireSignature ? { toleranceSeconds: 300 } : undefined,
     );
     if (!verification.valid) {
       throw new UnauthorizedError("invalid_signature", verification.reason);

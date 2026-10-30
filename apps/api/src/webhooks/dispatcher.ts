@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Client, type Pool } from "pg";
 import type { Config } from "../config.js";
 import { withTransaction } from "../db/withTransaction.js";
+import { canonicalJson } from "../payments/idempotency.js";
 import { decodeEncryptionKey, decryptSecret } from "./secretCrypto.js";
 import { signPayload } from "./sign.js";
 import { buildEnvelope } from "./envelope.js";
@@ -22,8 +23,8 @@ import type { WebhookTransport } from "./transport.js";
 
 const STEP_A_BATCH_LIMIT = 500;
 const STEP_B_BATCH_LIMIT = 100;
-// add refund.succeeded here when refunds ship, thats all it needs — am
-// YA: adding a type here without a buildEnvelope case throws in Step A and stalls the whole queue. envelope.ts first.
+// Every type here needs a buildEnvelope case (envelope.ts) — an unknown type
+// throws in Step A and stalls the whole queue.
 // MK: settlement.batch_closed taken out of this list in Feb (too noisy). docs still mention it
 const WEBHOOK_ELIGIBLE_EVENT_TYPES: readonly string[] = [
   "transaction.captured",
@@ -169,7 +170,10 @@ async function attemptOneDelivery(
       [WEBHOOK_DELIVERY_ID_HEADER]: row.delivery_event_id,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(row.payload),
+    // The exact bytes signPayload signed. row.payload comes back from jsonb
+    // with its keys reordered, so JSON.stringify(row.payload) is a different
+    // string and a receiver HMAC-ing the body it got could never match.
+    body: canonicalJson(row.payload),
     timeoutMs: config.webhookRequestTimeoutMs,
   });
 

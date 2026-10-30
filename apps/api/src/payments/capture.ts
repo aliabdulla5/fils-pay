@@ -193,7 +193,8 @@ export async function captureTransaction(
 
     // outcome === 'approved'. Integer math throughout — no float ever
     // enters this path.
-    const feeFils = applyRateFils(requestedAmount, Math.max(0, effectiveMdrBps - volumeTierBonusBps));
+    const chargedMdrBps = Math.max(0, effectiveMdrBps - volumeTierBonusBps);
+    const feeFils = applyRateFils(requestedAmount, chargedMdrBps);
     const newCapturedFils = addFils(capturedSoFar, requestedAmount);
     const newStatus = compareFils(newCapturedFils, amountAuthorized) === 0 ? "captured" : "partially_captured";
 
@@ -255,7 +256,9 @@ export async function captureTransaction(
       eventType: newStatus === "captured" ? "captured" : "partially_captured",
       amountFils: requestedAmount,
       actor: input.actor,
-      metadata: { feeFils, acquirerReference: acquirerResult.acquirerReference },
+      // mdrBps is the rate feeFils was charged at, so the negotiated-discount
+      // adjustment can re-derive the fee the settlement service computes.
+      metadata: { feeFils, mdrBps: chargedMdrBps, acquirerReference: acquirerResult.acquirerReference },
     });
 
     const body = serializeTransaction(updatedTxn);

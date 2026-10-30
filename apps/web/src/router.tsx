@@ -20,6 +20,9 @@ import { OverviewPage } from "./pages/overview/OverviewPage.js";
 
 // MK: /refunds route removed until FP-212
 export const router = createBrowserRouter([
+  // Bare origin has no page of its own; send it to the dashboard (which
+  // bounces to /dashboard/login when there is no session).
+  { path: "/", element: <Navigate to="/dashboard" replace /> },
   { path: "/pay/:token", element: <CheckoutPage /> },
 
   {

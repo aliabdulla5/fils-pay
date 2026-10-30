@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { timingSafeEqualHex } from "../lib/crypto.js";
 
 /** Verifies the signature on an inbound acquirer callback. */
 
@@ -29,25 +30,30 @@ function parseAcquirerSignatureHeader(header: string): ParsedAcquirerSignatureHe
   return { timestamp, signature };
 }
 
-/** There is no timestamp reason: freshness is not checked for inbound callbacks. */
-export type VerifyAcquirerCallbackFailureReason = "malformed_header" | "signature_mismatch";
+export type VerifyAcquirerCallbackFailureReason = "malformed_header" | "signature_mismatch" | "stale_timestamp";
 
 export interface VerifyAcquirerCallbackResult {
   valid: boolean;
   reason?: VerifyAcquirerCallbackFailureReason;
 }
 
-function constantTimeEquals(a: string, b: string): boolean {
-  return Buffer.from(a).length === Buffer.from(b).length &&
-    Buffer.compare(Buffer.from(a), Buffer.from(b)) === 0;
+export interface VerifyFreshnessOptions {
+  /** Reject a signature whose `t=` is further than this from now. */
+  toleranceSeconds: number;
+  nowSeconds?: number;
 }
 
-/** Verifies the acquirer callback signature when present and required. */
+/**
+ * Verifies the acquirer callback signature when present and required.
+ * With `freshness`, a correctly-signed but old (or future) timestamp is
+ * rejected too — otherwise a captured callback can be replayed forever.
+ */
 export function verifyAcquirerCallbackSignature(
   payload: unknown,
   header: string | undefined,
   secret: string,
   requireSignature = false,
+  freshness?: VerifyFreshnessOptions,
 ): VerifyAcquirerCallbackResult {
   if (!header) {
     return requireSignature
@@ -62,8 +68,17 @@ export function verifyAcquirerCallbackSignature(
     .update(`${parsed.timestamp}.${JSON.stringify(payload)}`)
     .digest("hex");
 
-  if (!constantTimeEquals(expected, parsed.signature)) {
+  // The old helper was named constantTimeEquals but used Buffer.compare,
+  // which returns at the first differing byte.
+  if (!timingSafeEqualHex(expected, parsed.signature)) {
     return { valid: false, reason: "signature_mismatch" };
+  }
+
+  if (freshness) {
+    const now = freshness.nowSeconds ?? Math.floor(Date.now() / 1000);
+    if (Math.abs(now - parsed.timestamp) > freshness.toleranceSeconds) {
+      return { valid: false, reason: "stale_timestamp" };
+    }
   }
 
   return { valid: true };

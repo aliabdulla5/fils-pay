@@ -9,9 +9,15 @@ demo instance uses the same compose file with a different `.env`.
 ```
 docker compose -f ops/docker-compose.yml up -d postgres
 docker compose -f ops/docker-compose.yml run --rm migrate
-docker compose -f ops/docker-compose.yml run --rm seed
+docker compose -f ops/docker-compose.yml --profile seed run --rm seed   # laptop only — wipes the database
 docker compose -f ops/docker-compose.yml up api settlement reporting
 ```
+
+For a laptop, copy `ops/.env.docker.example` to `ops/.env` and keep
+`NODE_ENV=development`. Without it the api starts in production mode and
+refuses to boot until its secrets are set — which is what the hosted box
+needs. The `seed` job sits behind the `seed` profile so `docker compose up`
+never runs it: it truncates the ledger, merchants and admin users.
 
 apps/web and apps/admin aren't part of this compose file — they're plain
 Vite dev servers that talk to apps/api over HTTP (`npm run dev` inside
@@ -55,8 +61,8 @@ first.
 | Service | Needs | Where it comes from in compose |
 |---|---|---|
 | api | `DATABASE_URL`, `SETTLEMENT_INTERNAL_URL` | `environment:` |
-| api | `WEBHOOK_SECRET_ENCRYPTION_KEY` | only outside dev; a dev key is used otherwise |
-| api | `ACQUIRER_CALLBACK_SIGNING_SECRET`, `NODE_ENV` | `.env.docker` |
+| api | `NODE_ENV` | `ops/.env`; defaults to `production` |
+| api | `WEBHOOK_SECRET_ENCRYPTION_KEY`, `ACQUIRER_CALLBACK_SIGNING_SECRET`, `SETTLEMENT_INTERNAL_TOKEN` | `ops/.env`; required in production |
 | settlement | `DATABASE_URL` | `environment:` |
 | settlement | `SETTLEMENT_INTERNAL_TOKEN` | defaults to `dev-token` |
 | reporting | `DATABASE_URL` | `environment:`; runs `worker` by default |

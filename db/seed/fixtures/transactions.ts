@@ -195,9 +195,9 @@ const MARKETPLACE_ORDER_TOTALS_FILS: readonly number[] = [
 export interface GeneratedCaptureEvent {
   transactionId: string;
   amountFils: Fils;
-  /** The fee actually charged at capture time, i.e. the MDR fee less the
-   *  merchant's negotiated discount off it — the value capture.ts records
-   *  in `transaction_events.metadata.feeFils`. */
+  /** The fee actually charged at capture time, net of the merchant's
+   *  negotiated discount (taken off the amount before MDR, as settlement's
+   *  ComputeSettlementFee does). */
   feeFils: Fils;
   occurredAt: Date;
 }
@@ -258,12 +258,15 @@ export function generateMarketplaceOrdersForMerchant(params: {
         occurredAt,
       });
 
-      // Capture-time fee: the MDR, then the merchant's negotiated discount
-      // off that fee — the exact pair of postings capture.ts and
+      // Capture-time fee, net of the negotiated discount: the discount comes
+      // off the amount before the MDR is applied (ARCHITECTURE "Settlement",
+      // discounted_fee.go's ComputeSettlementFee) — what capture.ts plus
       // discountAdjustment.ts leave behind, folded into one balanced group
-      // the same way every other seeded capture is.
-      const feeBeforeDiscount = applyRateFils(amountFils, mdrBps);
-      const feeFils = subtractFils(feeBeforeDiscount, applyRateFils(feeBeforeDiscount, discountBps));
+      // the same way every other seeded capture is. Taking the discount off
+      // the fee instead charged exactly 1 fil more on every basket total
+      // in the catalogue above, so each seeded order disagreed with the
+      // batch CloseBatch computes for it.
+      const feeFils = applyRateFils(subtractFils(amountFils, applyRateFils(amountFils, discountBps)), mdrBps);
       const merchantNet = subtractFils(amountFils, feeFils);
 
       const legs: LedgerLeg[] = [

@@ -81,11 +81,17 @@ export type ImpersonationMerchantRole = "owner" | "finance" | "support";
 /** `admin_users.role` (migration 0031). */
 type AdminUserRole = "support" | "finance" | "super_admin";
 
-/** Maps the admin's role to the merchant-plane role used during impersonation. */
+/**
+ * Maps the admin's role to the merchant-plane role used during
+ * impersonation. Every admin gets "support" — a grant is view-only (ARCH §8,
+ * HANDOVER). Mapping finance→finance and super_admin→owner let an admin
+ * "viewing as" a merchant pass requireMerchantRole("owner","finance") and
+ * create payment links, refunds and webhooks in the merchant's name.
+ */
 const MERCHANT_ROLE_FOR_ADMIN_ROLE: Record<AdminUserRole, ImpersonationMerchantRole> = {
   support: "support",
-  finance: "finance",
-  super_admin: "owner",
+  finance: "support",
+  super_admin: "support",
 };
 
 /** @property merchantRole Always "support" (ARCH §8): a grant is view-only. */
@@ -120,7 +126,8 @@ export async function lookupImpersonationGrant(
       WHERE g.token_hash = $1
         AND g.revoked_at IS NULL
         AND g.ended_at IS NULL
-        AND g.expires_at > now()`,
+        AND g.expires_at > now()
+        AND au.status = 'active'`,
     [tokenHash],
   );
   const row = result.rows[0];

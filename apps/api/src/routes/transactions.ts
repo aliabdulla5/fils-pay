@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { toFils } from "@filspay/money";
 import { requireApiKey } from "../apiKeys/verify.js";
-import { requireMerchantAuth, requireMerchantWriterActor } from "../auth/requireMerchantAuth.js";
+import { requireMerchantAuth, requireMerchantRole, requireMerchantWriterActor } from "../auth/requireMerchantAuth.js";
 import { authorizeTransaction, type AuthorizeInput } from "../payments/authorize.js";
 import { captureTransaction } from "../payments/capture.js";
 import { applyCaptureDiscountAdjustment } from "../payments/discountAdjustment.js";
@@ -118,9 +118,8 @@ export async function transactionRoutes(app: FastifyInstance): Promise<void> {
   );
 
   app.post<{ Params: TransactionIdParams }>(
-    // TODO(FH): role check? finance role users shouldn't void. ask MK
     "/:id/void",
-    { preHandler: requireMerchantAuth },
+    { preHandler: [requireMerchantAuth, requireMerchantRole("owner")] },
     async (request, reply) => {
       const result = await voidTransaction(app.db, {
         transactionId: request.params.id,

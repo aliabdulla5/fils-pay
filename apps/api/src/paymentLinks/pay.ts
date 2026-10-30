@@ -1,4 +1,4 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { toFils } from "@filspay/money";
 import { authorizeTransaction } from "../payments/authorize.js";
 import { captureTransaction } from "../payments/capture.js";
@@ -29,8 +29,8 @@ interface LinkStatusRow {
   expires_at: Date;
 }
 
-/** A pay request is judged against when the buyer pressed pay, so a
- * retry that lands after midnight is not penalised. */
+/** Parses a client-supplied "pressed pay" timestamp. Not used for the
+ * expiry decision: the body is unauthenticated, so the server clock rules. */
 export function expiryReferenceTime(submittedAt?: string): Date {
   if (!submittedAt) return new Date();
   const parsed = new Date(submittedAt);
@@ -57,7 +57,59 @@ export async function payPaymentLink(
   config: { paymentLinkReservationTimeoutSeconds: number },
   input: PayPaymentLinkInput,
 ): Promise<PayPaymentLinkResult> {
-  const expiryCheckTime = expiryReferenceTime(input.submittedAt);
+  // One pay attempt per link at a time. The reservation timeout alone let a
+  // second buyer re-claim a link whose first attempt was merely slow at the
+  // acquirer (not dead): both captured, and the loser's finalize matched 0
+  // rows but still answered 200 — two cards charged for one link (incident
+  // 2026-05-14). A session advisory lock is held for the whole attempt and
+  // released by Postgres if this process dies, so the stale-reservation
+  // re-claim below now only ever recovers an attempt that is truly gone.
+  const lockClient = await pool.connect();
+  try {
+    const lock = await lockClient.query<{ locked: boolean }>(
+      `SELECT pg_try_advisory_lock(hashtext('payment_link'), hashtext($1)) AS locked`,
+      [input.token],
+    );
+    if (!lock.rows[0]?.locked) {
+      return { statusCode: 409, body: { error: "payment_link_processing" } };
+    }
+    try {
+      // The whole attempt runs on the connection holding the lock. Running it
+      // on `pool` pinned a second connection per attempt while authorize and
+      // capture waited for more (PG_POOL_MAX defaults to 5): five slow
+      // buyers starved every route of the API until their checkouts timed
+      // out — from a public, unauthenticated endpoint.
+      return await payPaymentLinkLocked(onConnection(lockClient), acquirer, config, input);
+    } finally {
+      await lockClient.query(`SELECT pg_advisory_unlock(hashtext('payment_link'), hashtext($1))`, [input.token]);
+    }
+  } finally {
+    lockClient.release();
+  }
+}
+
+/**
+ * A Pool-shaped view of one checked-out client. authorizeTransaction and
+ * captureTransaction only ever call pool.connect() / client.query /
+ * client.release() (through withTransaction), so their transactions run in
+ * sequence on this same connection; release() is a no-op because the
+ * caller still owns the client and its session advisory lock.
+ */
+function onConnection(client: PoolClient): Pool {
+  const query = client.query.bind(client);
+  return { query, connect: async () => ({ query, release: () => {} }) } as unknown as Pool;
+}
+
+async function payPaymentLinkLocked(
+  pool: Pool,
+  acquirer: AcquirerSimulator,
+  config: { paymentLinkReservationTimeoutSeconds: number },
+  input: PayPaymentLinkInput,
+): Promise<PayPaymentLinkResult> {
+  // Expiry is judged on the server's clock only. submittedAt comes from an
+  // unauthenticated public body, so honouring it let anyone pay an expired
+  // link by sending an old timestamp (FP-187).
+  const expiryCheckTime = new Date();
 
   // Step 1 — claim. A single UPDATE is already atomic; no explicit
   // transaction needed.
@@ -153,12 +205,12 @@ export async function payPaymentLink(
   // pays and finalizes first; we land here, answer 200, and the card was charged twice
   // MK: authorize+capture is under a second. 60s can't happen. unreachable
   if (!finalized) {
-    // Should be unreachable in normal operation (this request is the only
-    // holder of the reservation). The acquirer-side capture genuinely
-    // succeeded and money moved; failing to *record* that fact against the
-    // link is a data-consistency bug to surface loudly, not a reason to
-    // tell a customer whose card was actually charged that their payment
-    // failed.
+    // Unreachable while the advisory lock above is held: no other attempt
+    // can claim this link until this one returns. The acquirer-side capture
+    // genuinely succeeded and money moved; failing to *record* that fact
+    // against the link is a data-consistency bug to surface loudly, not a
+    // reason to tell a customer whose card was actually charged that their
+    // payment failed.
     console.error(
       `payPaymentLink: finalize UPDATE matched 0 rows for link ${link.id} after a successful capture ` +
         `(transaction ${txnId}) — invariant violation, investigate`,

@@ -9,12 +9,28 @@
  * Usage: DATABASE_URL=postgres://... npx tsx scripts/reconcile_march.ts
  */
 import { randomUUID } from "node:crypto";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { Client } from "pg";
 import { formatBhd, toFils } from "@filspay/money";
 
+/** Asia/Bahrain is UTC+3 all year (no DST since 1972) — window.go. */
+const BAHRAIN_OFFSET_MS = 3 * 60 * 60 * 1000;
+
+/**
+ * The Bahrain calendar month: [1st 00:00 Asia/Bahrain, next 1st 00:00), as
+ * UTC instants. The residue swept here is the residue of batch lines, and
+ * batches close on Bahrain business days (ADR-0003's own daily rule), so the
+ * month has to be cut the same way. The UTC month moved the first three
+ * Bahrain hours of March into February and the first three of April into
+ * March — the gap HANDOVER warned about ("use the Bahrain month, not a UTC
+ * month") and the reason March never tied for finance (ADR-0007).
+ */
 export function monthBounds(year: number, month: number): { start: Date; end: Date } {
-  return { start: new Date(Date.UTC(year, month - 1, 1)), end: new Date(Date.UTC(year, month, 1)) };
+  return {
+    start: new Date(Date.UTC(year, month - 1, 1) - BAHRAIN_OFFSET_MS),
+    end: new Date(Date.UTC(year, month, 1) - BAHRAIN_OFFSET_MS),
+  };
 }
 
 export interface ResidueRow {
@@ -68,17 +84,33 @@ function groupByMerchant(rows: ResidueRow[]): MerchantResidue[] {
   return [...byMerchant.values()];
 }
 
-// am: re-running is safe, entry_group_id dedupes it
-async function postResidueCorrection(client: Client, merchant: MerchantResidue, now: Date): Promise<void> {
-  if (merchant.residueFils <= 0) return;
-  const entryGroupId = randomUUID();
+// Re-running was NOT safe: entry_group_id is a fresh randomUUID() per run,
+// so it dedupes nothing, and a second run posted March's residue again. The
+// sweep's own description is its business key — a merchant that already has
+// it is skipped (returns false).
+//
+// The legs are ADR-0002's, the same pair CloseBatch now posts per line: the
+// residue leaves card_scheme_clearing for the scheme_rounding_residue
+// suspense account. The old legs debited merchant_payable — charging each
+// merchant for fils the *scheme* did not settle. `effectiveAt` dates the
+// correction in the period it corrects (ARCHITECTURE "The ledger"), not on
+// whatever day the script happened to run.
+async function postResidueCorrection(client: Client, merchant: MerchantResidue, effectiveAt: Date): Promise<boolean> {
+  if (merchant.residueFils <= 0) return false;
   const description = "March 2026 scheme rounding residue sweep — manual recon per finance";
+  const already = await client.query(
+    `SELECT 1 FROM ledger_entries WHERE merchant_id = $1 AND description = $2 LIMIT 1`,
+    [merchant.merchantId, description],
+  );
+  if (already.rowCount) return false;
+  const entryGroupId = randomUUID();
   await client.query(
     `INSERT INTO ledger_entries (entry_group_id, merchant_id, account_id, direction, amount_fils, occurred_at, description)
-     VALUES ($1, $2, 'merchant_payable', 'debit', $3, $4, $5),
-            ($1, $2, 'scheme_rounding_residue', 'credit', $3, $4, $5)`,
-    [entryGroupId, merchant.merchantId, merchant.residueFils, now.toISOString(), description],
+     VALUES ($1, $2, 'card_scheme_clearing', 'credit', $3, $4, $5),
+            ($1, $2, 'scheme_rounding_residue', 'debit', $3, $4, $5)`,
+    [entryGroupId, merchant.merchantId, merchant.residueFils, effectiveAt.toISOString(), description],
   );
+  return true;
 }
 
 async function main(): Promise<void> {
@@ -89,26 +121,45 @@ async function main(): Promise<void> {
 
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
-  // FH: the log says 'run at ...+03:00' but toISOString is always Z?? MK: different node version
   const now = new Date();
+  const { start, end } = monthBounds(2026, 3);
+  // The last instant of the Bahrain month: corrections belong to March.
+  const effectiveAt = new Date(end.getTime() - 1);
+
+  // Every run is appended to the log, each line stamped with its run time.
+  // The old log was the console redirected with `>`: a second run replaced
+  // the first, so the log only ever showed one timestamp and a double run
+  // (the doubled gap) left no trace.
+  const lines: string[] = [];
+  const log = (line: string): void => {
+    console.log(line);
+    lines.push(`[run ${now.toISOString()}] ${line}`);
+  };
 
   try {
     const rows = await fetchResidueRows(client, 2026, 3);
     const merchantResidues = groupByMerchant(rows);
     const totalResidueFils = merchantResidues.reduce((sum, m) => sum + m.residueFils, 0);
 
-    const { start, end } = monthBounds(2026, 3);
-    console.log("=== March 2026 reconciliation sweep ===");
-    console.log(`run at: ${now.toISOString()}`);
-    console.log(`window: ${start.toISOString().slice(0, 10)} .. ${end.toISOString().slice(0, 10)}`);
-    console.log("");
+    log("=== March 2026 reconciliation sweep ===");
+    log(`run at: ${now.toISOString()}`);
+    log(`window (Asia/Bahrain): ${start.toISOString()} .. ${end.toISOString()}`);
+    log(`entries dated: ${effectiveAt.toISOString()}`);
+    log("");
 
+    let postedResidueFils = 0;
     await client.query("BEGIN");
     try {
       for (const merchant of merchantResidues) {
-        await postResidueCorrection(client, merchant, now);
-        console.log(
-          `merchant ${merchant.merchantId}: ${merchant.lineCount} line(s), residue ${formatBhd(toFils(merchant.residueFils))} BD (${merchant.residueFils} fils)`,
+        // Serialize concurrent runs on the same merchant's check-then-insert.
+        await client.query(`SELECT pg_advisory_xact_lock(hashtext('reconcile_march'), hashtext($1))`, [
+          merchant.merchantId,
+        ]);
+        const posted = await postResidueCorrection(client, merchant, effectiveAt);
+        if (posted) postedResidueFils += merchant.residueFils;
+        log(
+          `merchant ${merchant.merchantId}: ${merchant.lineCount} line(s), residue ${formatBhd(toFils(merchant.residueFils))} BD (${merchant.residueFils} fils)` +
+            (posted ? "" : " — already swept, skipped"),
         );
       }
       await client.query("COMMIT");
@@ -117,13 +168,20 @@ async function main(): Promise<void> {
       throw err;
     }
 
-    console.log("---");
-    console.log(`total lines matched: ${rows.length}`);
-    console.log(`total residue swept: ${formatBhd(toFils(totalResidueFils))} BD (${totalResidueFils} fils)`);
-    console.log("");
-    console.log("reconciliation applied successfully");
+    log("---");
+    log(`total lines matched: ${rows.length}`);
+    log(`total residue found: ${formatBhd(toFils(totalResidueFils))} BD (${totalResidueFils} fils)`);
+    log(`posted this run: ${formatBhd(toFils(postedResidueFils))} BD (${postedResidueFils} fils)`);
+    log("");
+    log("reconciliation applied successfully");
+  } catch (err) {
+    log(`FAILED: ${String(err)}`);
+    throw err;
   } finally {
     await client.end();
+    const logDir = new URL("./out/", import.meta.url);
+    mkdirSync(logDir, { recursive: true });
+    appendFileSync(new URL("reconcile-2026-03.log", logDir), lines.join("\n") + "\n");
   }
 }
 

@@ -140,15 +140,15 @@ async function applyBatchClosed(client: PoolClient, row: OutboxEventRow): Promis
   const groundTruthCount = Number(groundTruth.rows[0]?.event_count ?? "0");
 
   if (groundTruthCount > 0) {
-    const rollupResult = await client.query(
+    const rollupResult = await client.query<{ captured_count: number }>(
       `SELECT captured_count FROM merchant_daily_volume WHERE merchant_id = $1 AND volume_date = $2`,
       [payload.merchantId, payload.batchDate],
     );
-    const rollup = rollupResult.rows[0] as { captured_count: number };
-    if (rollup.captured_count < groundTruthCount) {
+    const rollupCount = rollupResult.rows[0]?.captured_count ?? 0;
+    if (rollupCount < groundTruthCount) {
       console.warn(
         `reporting rollup lags ground truth for merchant ${payload.merchantId} on ${payload.batchDate}: ` +
-          `rollup=${rollup.captured_count} ground_truth=${groundTruthCount}`,
+          `rollup=${rollupCount} ground_truth=${groundTruthCount}`,
       );
     }
   }
@@ -156,10 +156,10 @@ async function applyBatchClosed(client: PoolClient, row: OutboxEventRow): Promis
 
 
 /**
- * Rolls up a running daily refund summary, keyed by calendar date.
- * Called from the refund event path once refund events are wired into
- * the outbox (the consumer SELECT in runConsumerPass will include
- * "transaction.refunded" once the refund flow lands).
+ * Rolls up a running daily refund summary into merchant_daily_volume, keyed
+ * by the Asia/Bahrain business date — the same bucketing captures and voids
+ * use. A UTC date would file a refund made between 00:00 and 03:00 Bahrain
+ * time under the previous day.
  */
 export async function applyDailySummaryRollup(
   client: PoolClient,
@@ -167,7 +167,7 @@ export async function applyDailySummaryRollup(
   occurredAt: Date,
   amountFils: number,
 ): Promise<void> {
-  const summaryDate = occurredAt.toISOString().slice(0, 10);
+  const summaryDate = toBahrainDateString(occurredAt);
   await client.query(
     `INSERT INTO merchant_daily_volume (merchant_id, volume_date, refund_count, refund_gross_fils, last_updated_at)
      VALUES ($1, $2, 1, $3, now())
@@ -185,7 +185,7 @@ export async function applyDailySummaryRollup(
  * wired into this switch fails loudly (a thrown error rolls back the whole
  * pass, per runConsumerPass's transactional discipline) rather than
  * silently dropping the event — runConsumerPass's own SELECT already
- * filters to the three types handled below, so this branch should never
+ * filters to the types handled below, so this branch should never
  * actually run against real data.
  */
 export async function applyEvent(client: PoolClient, row: OutboxEventRow): Promise<void> {
@@ -194,6 +194,11 @@ export async function applyEvent(client: PoolClient, row: OutboxEventRow): Promi
       return applyTransactionCaptured(client, row);
     case "transaction.voided":
       return applyTransactionVoided(client, row);
+    case "refund.succeeded": {
+      // processRefund.ts's outbox payload: { merchantId, amountFils, ... }
+      const payload = row.payload as { merchantId: string; amountFils: number };
+      return applyDailySummaryRollup(client, payload.merchantId, row.created_at, payload.amountFils);
+    }
     case "settlement.batch_closed":
       return applyBatchClosed(client, row);
     default:

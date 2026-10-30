@@ -47,6 +47,14 @@ export async function kycRoutes(app: FastifyInstance): Promise<void> {
 
       for await (const part of request.parts()) {
         if (part.type === "file") {
+          // One file per request, refused before the next part is buffered.
+          // This was claimed (plugins/multipart.ts) but never enforced: every
+          // file part was read into memory in full (up to the 8 MB limit
+          // each) and only the last one kept — N parts, N x 8 MB, in a
+          // 512 MB container.
+          if (buffer) {
+            throw new BadRequestError("too_many_files", "upload exactly one file per request");
+          }
           buffer = await part.toBuffer();
           fileName = part.filename;
         } else if (part.fieldname === "documentType") {

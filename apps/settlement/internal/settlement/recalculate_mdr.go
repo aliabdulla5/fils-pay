@@ -100,15 +100,31 @@ func RecalculateMDR(ctx context.Context, db *pgxpool.Pool, merchantID uuid.UUID,
 		if diff == 0 {
 			continue
 		}
-		newNetPayout := b.grossFils - newFee
+		// A 'paid' batch's money has already left: its fee_fils and
+		// net_payout_fils are the record of what the bank was told to send,
+		// and the scheme file / payout notification were built from them.
+		// Rewriting them made the batch disagree with the actual transfer.
+		// For a paid batch only the ledger moves (dated now, not tied to the
+		// paid batch), so the difference is owed or collected going forward.
+		// A 'closed' batch is still unpaid and is corrected in place.
+		adjustBatchID := &b.id
+		if b.status == "paid" {
+			adjustBatchID = nil
+		}
 		// am: posts against the OLD batch id so it never lands in a new payout?? fixed in FP-244 i think
-		if err := postMdrAdjustment(ctx, tx, merchantID, b.id, diff); err != nil {
+		if err := postMdrAdjustment(ctx, tx, merchantID, adjustBatchID, diff); err != nil {
 			return RecalcResult{}, err
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE settlement_batches SET fee_fils = $2, net_payout_fils = $3 WHERE id = $1
-		`, b.id, int64(newFee), int64(newNetPayout)); err != nil {
-			return RecalcResult{}, fmt.Errorf("settlement: RecalculateMDR: update batch %s: %w", b.id, err)
+		if b.status != "paid" {
+			// Move net by exactly the fee difference. Re-deriving it as
+			// gross - newFee would drop the refunds CloseBatch netted into
+			// this batch (refunded_fils / fee_reversed_fils, 0073).
+			newNetPayout := b.netPayoutFils - diff
+			if _, err := tx.Exec(ctx, `
+				UPDATE settlement_batches SET fee_fils = $2, net_payout_fils = $3 WHERE id = $1
+			`, b.id, int64(newFee), int64(newNetPayout)); err != nil {
+				return RecalcResult{}, fmt.Errorf("settlement: RecalculateMDR: update batch %s: %w", b.id, err)
+			}
 		}
 		// A fee increase (diff > 0) reduces net payout owed, so the cache
 		// moves by -diff — the same signed-delta idiom ApplyBatchClose
@@ -170,7 +186,7 @@ func recomputeBatchFee(ctx context.Context, tx pgx.Tx, batchID uuid.UUID, mdrBps
 //
 // Both legs are dated now(), not the batch date, so no closed period is
 // reopened by the adjustment itself.
-func postMdrAdjustment(ctx context.Context, tx pgx.Tx, merchantID, batchID uuid.UUID, diff money.Fils) error {
+func postMdrAdjustment(ctx context.Context, tx pgx.Tx, merchantID uuid.UUID, batchID *uuid.UUID, diff money.Fils) error {
 	if diff == 0 {
 		return nil
 	}
@@ -193,7 +209,7 @@ func postMdrAdjustment(ctx context.Context, tx pgx.Tx, merchantID, batchID uuid.
 		  ($1, $2, $3, $5, 'credit', $6, now(), 'MDR recalculation adjustment')
 	`, uuid.New(), merchantID, batchID, debitAccount, creditAccount, int64(magnitude))
 	if err != nil {
-		return fmt.Errorf("settlement: RecalculateMDR: post adjustment for batch %s: %w", batchID, err)
+		return fmt.Errorf("settlement: RecalculateMDR: post adjustment for merchant %s: %w", merchantID, err)
 	}
 	return nil
 }

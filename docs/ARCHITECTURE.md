@@ -38,9 +38,10 @@ of balanced legs sharing an `entry_group_id`, enforced by a deferred
 constraint trigger (migration 0007). Corrections are new entries posted with
 the effective date of the period they correct.
 
-`merchant_balances` is a cache; `settlement rebuild-balances` refreshes it.
-The daemon also refreshes it at 02:00 Bahrain time, and the console's
-**Rebuild cached balances** button triggers the same refresh on demand.
+`merchant_balances` is a cache. The CLI, daily daemon and console's
+**Rebuild cached balances** button all recompute it from credits and debits
+on `merchant_payable` in `ledger_entries` (ADR-0008). The rebuild serializes
+with settlement's incremental cache updates.
 
 ## Settlement
 

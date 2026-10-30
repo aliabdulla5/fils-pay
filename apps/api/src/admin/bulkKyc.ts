@@ -1,10 +1,13 @@
 import type { Pool } from "pg";
 import { insertAdminAuditLog } from "../adminAudit/log.js";
 import { withTransaction } from "../db/withTransaction.js";
+import { recordKycReviewInTx } from "../onboarding/review.js";
 
 export interface BulkApproveMerchantsKycInput {
   merchantIds: string[];
   adminUserId: string;
+  /** The reviewing admin's email — merchant_kyc_reviews.reviewer_identifier, as the single review writes it. */
+  adminEmail: string;
   notes?: string;
 }
 
@@ -23,14 +26,29 @@ export async function bulkApproveMerchantsKyc(
   input: BulkApproveMerchantsKycInput,
 ): Promise<BulkApproveMerchantsKycResult> {
   return withTransaction(pool, async (client) => {
-    const result = await client.query<{ id: string }>(
-      `UPDATE merchants
-          SET onboarding_status = 'approved', kyc_passed = true
-        WHERE id = ANY($1::uuid[])
-      RETURNING id`,
+    // Only merchants actually awaiting review. The bare UPDATE approved any
+    // id it was given — a merchant KYC had *rejected* came back approved —
+    // and wrote no merchant_kyc_reviews row, which 0016 makes the single
+    // source of truth for every approval. Each one now goes through the one
+    // function allowed to approve (the same as the single-merchant review).
+    const pending = await client.query<{ id: string }>(
+      `SELECT id FROM merchants
+        WHERE id = ANY($1::uuid[]) AND onboarding_status = 'under_review'
+        ORDER BY id
+        FOR UPDATE`,
       [input.merchantIds],
     );
-    const approvedMerchantIds = result.rows.map((row) => row.id);
+    const approvedMerchantIds: string[] = [];
+    for (const row of pending.rows) {
+      await recordKycReviewInTx(client, {
+        merchantId: row.id,
+        outcome: "approved",
+        reviewerIdentifier: input.adminEmail,
+        reviewerAdminUserId: input.adminUserId,
+        notes: input.notes,
+      });
+      approvedMerchantIds.push(row.id);
+    }
 
     await insertAdminAuditLog(client, {
       adminUserId: input.adminUserId,

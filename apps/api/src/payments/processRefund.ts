@@ -36,7 +36,15 @@ interface RefundTransactionRow {
   acquirer_reference: string;
 }
 
-/** Refund business logic: validate, call the acquirer, then journal the reversal. */
+/**
+ * Refund business logic: validate, call the acquirer, then journal the
+ * reversal — all inside ONE transaction holding the transaction row lock,
+ * the same discipline capture.ts uses. Two concurrent refunds (different
+ * idempotency keys) therefore serialize on the row: the second one reads the
+ * first one's refunded_fils and is validated against what is actually left,
+ * instead of both passing validation on the same stale snapshot and both
+ * reaching the acquirer.
+ */
 export async function processRefund(
   pool: Pool,
   acquirer: AcquirerSimulator,
@@ -48,8 +56,8 @@ export async function processRefund(
     reason: input.reason ?? null,
   });
 
-  // 1 validate
-  const prepared = await withTransaction(pool, async (client) => {
+  return withTransaction(pool, async (client) => {
+    // 1 validate
     const claim = await claimIdempotencyKey(client, {
       merchantId: input.merchantId,
       endpoint: ENDPOINT,
@@ -64,30 +72,32 @@ export async function processRefund(
       throw new ConflictError("request_in_progress");
     }
     if (claim.outcome === "replay") {
-      return {
-        kind: "settled" as const,
-        result: { statusCode: claim.row.responseStatusCode ?? 200, body: claim.row.responseBody },
-      };
+      return { statusCode: claim.row.responseStatusCode ?? 200, body: claim.row.responseBody };
     }
 
+    // Lock first, scoped to the caller's merchant: another merchant's
+    // transaction id answers 404 exactly like an unknown one.
     const txnResult = await client.query<RefundTransactionRow>(
       `SELECT id, merchant_id, status, amount_fils, captured_fils, refunded_fils, acquirer_reference
          FROM transactions
-        WHERE id = $1`,
-      [input.transactionId],
+        WHERE id = $1 AND merchant_id = $2
+        FOR UPDATE`,
+      [input.transactionId, input.merchantId],
     );
     const txn = txnResult.rows[0];
     if (!txn) {
       const body = { error: "transaction_not_found" };
       await completeIdempotencyKey(client, claim.row.id, { statusCode: 404, body });
-      return { kind: "settled" as const, result: { statusCode: 404, body } };
+      return { statusCode: 404, body };
     }
 
     const amountAuthorized = toFils(Number(txn.amount_fils));
     const capturedFils = toFils(Number(txn.captured_fils));
     const refundedFils = toFils(Number(txn.refunded_fils));
 
-    const refundableFils = subtractFils(amountAuthorized, refundedFils);
+    // Only money that was actually captured can go back — never the
+    // authorized-but-uncaptured headroom.
+    const refundableFils = subtractFils(capturedFils, refundedFils);
 
     const validation = validateRefundRequest(
       {
@@ -103,54 +113,55 @@ export async function processRefund(
     if (!validation.ok) {
       const statusCode = validation.code === "transaction_not_refundable" ? 409 : 422;
       await completeIdempotencyKey(client, claim.row.id, { statusCode, body: validation });
-      return { kind: "settled" as const, result: { statusCode, body: validation } };
+      return { statusCode, body: validation };
     }
 
-    // The fee this transaction was actually charged at capture, read from
-    // the ledger rather than recomputed from the merchant's current
-    // mdr_bps, so a rate change after capture can never retroactively alter
-    // what a refund reverses.
-    const feeResult = await client.query<{ fee_fils: string }>(
-      `SELECT COALESCE(SUM(amount_fils), 0)::text AS fee_fils
+    // The fee this transaction was actually charged, read from the ledger
+    // rather than recomputed from the merchant's current mdr_bps, so a rate
+    // change after capture can never retroactively alter what a refund
+    // reverses. Net of every non-refund debit on the fee account — the
+    // negotiated discount adjustment is a debit there, and reversing the
+    // pre-discount fee would hand the merchant back more than they paid.
+    // What earlier refunds already reversed comes from the same account.
+    const feeResult = await client.query<{ fee_net_fils: string; fee_reversed_fils: string }>(
+      `SELECT COALESCE(SUM(CASE WHEN description NOT LIKE 'refund:%'
+                                THEN CASE WHEN direction = 'credit' THEN amount_fils ELSE -amount_fils END
+                           END), 0)::text AS fee_net_fils,
+              COALESCE(SUM(CASE WHEN description LIKE 'refund:%' AND direction = 'debit'
+                                THEN amount_fils END), 0)::text AS fee_reversed_fils
          FROM ledger_entries
         WHERE transaction_id = $1
-          AND account_id = 'platform_fee_revenue'
-          AND direction = 'credit'`,
+          AND account_id = 'platform_fee_revenue'`,
       [txn.id],
     );
     const feeRow = feeResult.rows[0];
     if (!feeRow) {
       throw new Error("processRefund: fee aggregate returned no row");
     }
+    const feeChargedFils = toFils(Math.max(0, Number(feeRow.fee_net_fils)));
+    const feeAlreadyReversedFils = toFils(Number(feeRow.fee_reversed_fils));
+    const requestedAmount = validation.amountFils;
 
-    return {
-      kind: "proceed" as const,
+    // 2 acquirer — still holding the row lock, exactly like capture.
+    const acquirerResult = await acquirer.refund({
+      acquirerReference: txn.acquirer_reference,
+      amountFils: requestedAmount,
+      idempotencyKey: `${claim.row.id}:${claim.row.attemptCount}`,
+    });
+
+    const prepared = {
       claimId: claim.row.id,
-      attemptCount: claim.row.attemptCount,
       transactionId: txn.id,
       merchantId: txn.merchant_id,
-      acquirerReference: txn.acquirer_reference,
       amountAuthorized,
       capturedFils,
       refundedFils,
-      feeChargedFils: toFils(Number(feeRow.fee_fils)),
-      requestedAmount: validation.amountFils,
+      feeChargedFils,
+      feeAlreadyReversedFils,
+      requestedAmount,
     };
-  });
 
-  if (prepared.kind === "settled") {
-    return prepared.result;
-  }
-
-  // 2 acquirer
-  const acquirerResult = await acquirer.refund({
-    acquirerReference: prepared.acquirerReference,
-    amountFils: prepared.requestedAmount,
-    idempotencyKey: `${prepared.claimId}:${prepared.attemptCount}`,
-  });
-
-  // 3 journal
-  return withTransaction(pool, async (client) => {
+    // 3 journal
     if (acquirerResult.outcome === "declined") {
       const body = { error: "refund_declined" };
       await completeIdempotencyKey(client, prepared.claimId, { statusCode: 402, body });
@@ -168,11 +179,20 @@ export async function processRefund(
       capturedFils: prepared.capturedFils,
       refundedTotalFils: newRefundedTotal,
     });
-    const feeReversedFils = calculateRefundFee(
+    // Cumulative, not per-refund: the share of the fee owed back for
+    // everything refunded so far, minus what earlier refunds already
+    // reversed. Rounding each partial on its own drifts (fee 3 on 1000,
+    // refunded 500 + 500, rounds 2 + 2 = 4); this way a full refund always
+    // reverses exactly the fee that was charged, to the fils.
+    const feeReversedTargetFils = calculateRefundFee(
       prepared.capturedFils,
       prepared.feeChargedFils,
-      prepared.requestedAmount,
+      newRefundedTotal,
     );
+    const feeReversedFils =
+      compareFils(feeReversedTargetFils, prepared.feeAlreadyReversedFils) > 0
+        ? subtractFils(feeReversedTargetFils, prepared.feeAlreadyReversedFils)
+        : ZERO_FILS;
 
     const refundResult = await client.query<{ id: string; occurred_at: Date }>(
       `INSERT INTO refunds
@@ -186,7 +206,9 @@ export async function processRefund(
         prepared.requestedAmount,
         feeReversedFils,
         acquirerResult.acquirerReference,
-        input.reason ?? null,
+        // An explicit NULL bypasses the column DEFAULT and trips 0070's
+        // chk_refunds_reason_not_null, so pass the same default ourselves.
+        input.reason ?? "unspecified",
         input.actor.type,
         input.actor.id,
       ],

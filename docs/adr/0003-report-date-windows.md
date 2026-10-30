@@ -1,6 +1,6 @@
 # 0003. Date windows for reports and finance scripts
 
-- **Status:** Accepted
+- **Status:** Accepted; superseded in part by 0007
 - **Date:** 2026-02-26
 - **Deciders:** Mahmood Khalil
 - **Supersedes:** the "business day everywhere" note in ARCHITECTURE §3, for

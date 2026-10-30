@@ -27,6 +27,7 @@ func RefreshBalanceCache(ctx context.Context, db *pgxpool.Pool) (map[uuid.UUID]R
 			UNION
 			SELECT merchant_id FROM merchant_balances
 		) merchants
+		ORDER BY merchant_id
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("ledger: RefreshBalanceCache: select merchant ids: %w", err)
@@ -49,9 +50,20 @@ func RefreshBalanceCache(ctx context.Context, db *pgxpool.Pool) (map[uuid.UUID]R
 	diffs := make(map[uuid.UUID]RebuildDiff, len(merchantIDs))
 
 	for _, merchantID := range merchantIDs {
+		// Serialize with CloseBatch's incremental cache update. A placeholder
+		// row provides the same lock when this merchant has no cache row yet.
+		_, err := tx.Exec(ctx, `
+			INSERT INTO merchant_balances (merchant_id, cached_payable_fils, updated_at)
+			VALUES ($1, 0, now())
+			ON CONFLICT (merchant_id) DO NOTHING
+		`, merchantID)
+		if err != nil {
+			return nil, fmt.Errorf("ledger: RefreshBalanceCache: ensure cache row for %s: %w", merchantID, err)
+		}
+
 		var cachedBefore int64
-		err := tx.QueryRow(ctx, `
-			SELECT COALESCE(cached_payable_fils, 0) FROM merchant_balances WHERE merchant_id = $1
+		err = tx.QueryRow(ctx, `
+			SELECT COALESCE(cached_payable_fils, 0) FROM merchant_balances WHERE merchant_id = $1 FOR UPDATE
 		`, merchantID).Scan(&cachedBefore)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("ledger: RefreshBalanceCache: read cached balance for %s: %w", merchantID, err)

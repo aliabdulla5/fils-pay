@@ -67,8 +67,7 @@ type SchemeExportLine struct {
 // are the durable record — this is a pure read.
 func LoadSchemeExportLines(ctx context.Context, db *pgxpool.Pool, batchID uuid.UUID) ([]SchemeExportLine, error) {
 	rows, err := db.Query(ctx, `
-		SELECT sel.line_sequence, t.acquirer_reference,
-		       COALESCE(sel.amount, sel.amount_fils::numeric / 1000)::text
+		SELECT sel.line_sequence, t.acquirer_reference, sel.amount_fils
 		  FROM scheme_export_lines sel
 		  JOIN transactions t ON t.id = sel.transaction_id
 		 WHERE sel.settlement_batch_id = $1
@@ -82,9 +81,15 @@ func LoadSchemeExportLines(ctx context.Context, db *pgxpool.Pool, batchID uuid.U
 	var lines []SchemeExportLine
 	for rows.Next() {
 		var line SchemeExportLine
-		if err := rows.Scan(&line.LineSequence, &line.AcquirerReference, &line.Amount); err != nil {
+		var amountFils int64
+		if err := rows.Scan(&line.LineSequence, &line.AcquirerReference, &amountFils); err != nil {
 			return nil, fmt.Errorf("settlement: LoadSchemeExportLines: scan: %w", err)
 		}
+		// One source for the file: amount_fils, the figure the batch and
+		// the residue were computed from. The separate `amount` column held
+		// a rounded gross on rows written before the CloseBatch fix and was
+		// preferred here by COALESCE, so old batches re-exported wrong too.
+		line.Amount = formatFilsAsTwoDecimalString(money.Fils(amountFils))
 		lines = append(lines, line)
 	}
 	if err := rows.Err(); err != nil {

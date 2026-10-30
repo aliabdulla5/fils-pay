@@ -1,0 +1,24 @@
+# Image for apps/api, apps/reporting and the one-off migrate / seed jobs
+# (docker-compose.yml). Referenced by compose and ops/README.md but missing
+# from the repo, so `docker compose build` failed for everyone.
+FROM node:20-bookworm-slim
+
+WORKDIR /app
+
+# Workspace manifests first so `npm ci` is cached across source edits.
+COPY package.json package-lock.json ./
+COPY packages/money/package.json packages/money/
+COPY packages/events/package.json packages/events/
+COPY apps/api/package.json apps/api/
+COPY apps/reporting/package.json apps/reporting/
+COPY apps/web/package.json apps/web/
+COPY apps/admin/package.json apps/admin/
+RUN npm ci --no-audit --no-fund
+
+COPY . .
+
+# Fail closed if a host runs the image without setting NODE_ENV: development
+# exposes the OTP code in login responses (see docker-compose.yml, api).
+ENV NODE_ENV=production
+EXPOSE 3000
+CMD ["npx", "tsx", "apps/api/src/index.ts"]

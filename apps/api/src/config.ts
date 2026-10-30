@@ -150,7 +150,8 @@ function parseBoolEnv(value: string | undefined, fallback: boolean): boolean {
   return value === "true" || value === "1";
 }
 
-const DEV_FALLBACK_WEBHOOK_KEY_B64 = "dGVzdC1rZXktZm9yLWRldi1vbmx5LW5vdC1mb3ItcHJvZA==";
+// Exactly 32 bytes once decoded ("test-key-for-dev-only-not-for-pr").
+const DEV_FALLBACK_WEBHOOK_KEY_B64 = "dGVzdC1rZXktZm9yLWRldi1vbmx5LW5vdC1mb3ItcHI=";
 
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
@@ -256,6 +257,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     webhookRequestTimeoutMs: parseIntEnv(env.WEBHOOK_REQUEST_TIMEOUT_MS, 10_000),
 
     acquirerCallbackSigningSecret,
-    acquirerCallbackRequireSignature: parseBoolEnv(env.ACQUIRER_CALLBACK_REQUIRE_SIGNATURE, false),
+    // An unsigned callback is the only auth this public endpoint has, so it
+    // is accepted only outside production unless explicitly configured.
+    acquirerCallbackRequireSignature: parseBoolEnv(env.ACQUIRER_CALLBACK_REQUIRE_SIGNATURE, nodeEnv === "production"),
   };
 }
