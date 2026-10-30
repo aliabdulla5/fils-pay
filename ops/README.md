@@ -10,8 +10,10 @@ demo instance uses the same compose file with a different `.env`.
 docker compose -f ops/docker-compose.yml up -d postgres
 docker compose -f ops/docker-compose.yml run --rm migrate
 docker compose -f ops/docker-compose.yml --profile seed run --rm seed   # laptop only — wipes the database
-docker compose -f ops/docker-compose.yml up api settlement reporting
+docker compose -f ops/docker-compose.yml up -d --build   # edge, api, settlement, reporting
 ```
+
+The `edge` service (nginx, `ops/Dockerfile.edge`) is the only public entry point. It serves the web app (checkout and merchant dashboard) on :80 and the admin console on :8080, and proxies `/v1` to the api on both. It also sheds load: at most 48 api requests are in flight, and the rest get a JSON 503 with `Retry-After`. The api and Postgres ports are bound to 127.0.0.1. Every service restarts on failure, and the api is limited to 0.5 vCPU / 512 MB.
 
 For a laptop, copy `ops/.env.docker.example` to `ops/.env` and keep
 `NODE_ENV=development`. Without it the api starts in production mode and
@@ -19,9 +21,7 @@ refuses to boot until its secrets are set — which is what the hosted box
 needs. The `seed` job sits behind the `seed` profile so `docker compose up`
 never runs it: it truncates the ledger, merchants and admin users.
 
-apps/web and apps/admin aren't part of this compose file — they're plain
-Vite dev servers that talk to apps/api over HTTP (`npm run dev` inside
-each package), not services with their own database connection.
+For development, apps/web and apps/admin also run as plain Vite dev servers (`npm run dev` inside each package) that proxy `/v1` to apps/api.
 
 ## Files
 
