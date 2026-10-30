@@ -223,45 +223,121 @@
     color: var(--fp-burgundy);
   }
 
-  .dash-identity {
+  /* Account menu. The trigger stays compact at every width; the full merchant
+     name and email are in the panel, where long values wrap instead of being
+     truncated. */
+  .dash-account {
+    position: relative;
     margin-left: auto;
-    display: flex;
-    align-items: center;
-    gap: var(--fp-space-4);
-    min-width: 0;
+    flex: none;
   }
 
-  .dash-identity-text {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    min-width: 0;
-    overflow: hidden;
-    line-height: 1.25;
-  }
-
-  .dash-identity-merchant {
-    font-weight: 600;
-    font-size: var(--fp-text-sm);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 14rem;
-  }
-
-  .dash-identity-email {
-    display: flex;
+  .dash-account-trigger {
+    display: inline-flex;
     align-items: center;
     gap: var(--fp-space-2);
-    font-size: var(--fp-text-xs);
-    color: var(--fp-ink-2);
-    white-space: nowrap;
+    min-height: 2.5rem;
+    padding: var(--fp-space-1) var(--fp-space-2) var(--fp-space-1) var(--fp-space-1);
+    border: 1px solid var(--fp-line);
+    border-radius: 999px;
+    background: var(--fp-surface);
+    color: var(--fp-ink);
+    font: inherit;
+    font-size: var(--fp-text-sm);
+    cursor: pointer;
+    transition: border-color var(--fp-duration) var(--fp-ease), background var(--fp-duration) var(--fp-ease);
   }
 
-  .dash-identity-email span:first-child {
+  .dash-account-trigger:hover,
+  .dash-account.is-open .dash-account-trigger {
+    border-color: var(--fp-burgundy);
+    background: var(--fp-burgundy-tint);
+  }
+
+  .dash-account-trigger > .dash-icon {
+    color: var(--fp-ink-3);
+    transition: transform var(--fp-duration) var(--fp-ease);
+  }
+
+  .dash-account.is-open .dash-account-trigger > .dash-icon {
+    transform: rotate(180deg);
+  }
+
+  .dash-avatar {
+    display: inline-grid;
+    place-items: center;
+    width: 2rem;
+    height: 2rem;
+    flex: none;
+    border-radius: 50%;
+    background: var(--fp-burgundy);
+    color: var(--fp-surface);
+    font-family: var(--fp-font-display);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+
+  .dash-account-name {
+    max-width: 11rem;
     overflow: hidden;
+    font-weight: 600;
+    white-space: nowrap;
     text-overflow: ellipsis;
-    max-width: 12rem;
+  }
+
+  .dash-account-panel {
+    display: none;
+    position: absolute;
+    top: calc(100% + var(--fp-space-2));
+    right: 0;
+    z-index: var(--fp-z-overlay);
+    width: 20rem;
+    max-width: calc(100vw - 2rem);
+    padding: var(--fp-space-4);
+    border: 1px solid var(--fp-line);
+    border-radius: var(--fp-radius-lg);
+    background: var(--fp-surface);
+    box-shadow: var(--fp-shadow-2);
+  }
+
+  .dash-account.is-open .dash-account-panel {
+    display: block;
+  }
+
+  .dash-account-details {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--fp-space-1);
+    margin: 0 0 var(--fp-space-4);
+    padding-bottom: var(--fp-space-4);
+    border-bottom: 1px solid var(--fp-line);
+  }
+
+  .dash-account-details dd {
+    margin: 0;
+  }
+
+  .dash-account-merchant {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  /* An email is one unbroken word; let it wrap anywhere rather than clip. */
+  .dash-account-email {
+    color: var(--fp-ink-2);
+    font-size: var(--fp-text-sm);
+    overflow-wrap: anywhere;
+  }
+
+  .dash-account-details .dash-role-chip {
+    margin-top: var(--fp-space-1);
+  }
+
+  .dash-button.dash-account-logout {
+    width: 100%;
+    justify-content: center;
   }
 
   .dash-role-chip {
@@ -2047,15 +2123,15 @@
     display: none;
   }
 
-  /* Mid widths drop the nav icons and the email first; the role chip stays
-     visible at every width. */
+  /* Mid widths drop the nav icons and the merchant name from the account
+     trigger; the role chip stays visible at every width, and the full name
+     and email are always one click away in the account panel. */
   @media (max-width: 1320px) {
     .dash-shell .dash-nav a .dash-icon {
       display: none;
     }
 
-    .dash-identity-merchant,
-    .dash-identity-email span:first-child {
+    .dash-account-name {
       display: none;
     }
   }
@@ -2073,11 +2149,6 @@
 
     .dash-button.dash-menu-toggle {
       display: inline-flex;
-    }
-
-    .dash-header.is-open .dash-identity-merchant,
-    .dash-header.is-open .dash-identity-email span:first-child {
-      display: inline;
     }
 
     .dash-nav-panel {
@@ -2128,16 +2199,26 @@
       border-radius: 0 3px 3px 0;
     }
 
-    .dash-header.is-open .dash-identity {
+    /* Inside the open small-screen menu the account details show inline;
+       there is no separate dropdown to open. */
+    .dash-header.is-open .dash-account {
       margin-left: 0;
-      justify-content: space-between;
       padding-top: var(--fp-space-4);
       border-top: 1px solid var(--fp-line);
     }
 
-    .dash-header.is-open .dash-identity-text {
-      display: flex;
-      align-items: flex-start;
+    .dash-account-trigger {
+      display: none;
+    }
+
+    .dash-header.is-open .dash-account-panel {
+      display: block;
+      position: static;
+      width: auto;
+      max-width: none;
+      padding: 0;
+      border: 0;
+      box-shadow: none;
     }
 
     .dash-main {

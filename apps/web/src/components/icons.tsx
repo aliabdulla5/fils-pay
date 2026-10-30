@@ -100,6 +100,12 @@ export const IconClose = () => (
   </Icon>
 );
 
+export const IconChevronDown = () => (
+  <Icon>
+    <path d="M6 9l6 6 6-6" />
+  </Icon>
+);
+
 export const IconChevronLeft = () => (
   <Icon>
     <path d="M15 18l-6-6 6-6" />
