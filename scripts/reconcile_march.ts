@@ -28,8 +28,8 @@ const BAHRAIN_OFFSET_MS = 3 * 60 * 60 * 1000;
  */
 export function monthBounds(year: number, month: number): { start: Date; end: Date } {
   return {
-    start: new Date(Date.UTC(year, month - 1, 1)),
-    end: new Date(Date.UTC(year, month, 1)),
+    start: new Date(Date.UTC(year, month - 1, 1) - BAHRAIN_OFFSET_MS),
+    end: new Date(Date.UTC(year, month, 1) - BAHRAIN_OFFSET_MS),
   };
 }
 
