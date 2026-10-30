@@ -31,6 +31,14 @@ export function errorHandler(
     return;
   }
 
+  // pg's pool gave up waiting for a free connection: the API is saturated,
+  // not broken. A 503 with Retry-After tells clients and load balancers to
+  // back off; a 500 told them the request itself was bad.
+  if (/timeout exceeded when trying to connect/i.test(err.message)) {
+    reply.header("Retry-After", "1").code(503).send({ error: "overloaded", message: "try again shortly" });
+    return;
+  }
+
   request.log.error({ err, occurredOn: formatIsoDate(new Date()) }, "unhandled error");
   reply.code(500).send({ error: "internal_error" });
 }

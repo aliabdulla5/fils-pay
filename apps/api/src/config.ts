@@ -17,6 +17,13 @@ export interface Config {
   pgPoolIdleTimeoutMs: number;
   pgPoolConnectionTimeoutMs: number;
 
+  /** Fastify/pino log level. Per-request "info" lines are a measurable cost
+   *  on a 0.5 vCPU container under load; production can set "warn". */
+  logLevel: string;
+  /** Requests allowed in flight at once before new ones are refused with
+   *  503 + Retry-After (plugins/overload.ts). 0 disables the cap. */
+  maxInflightRequests: number;
+
   sessionTtlHours: number;
   pendingSessionTtlMinutes: number;
   otpTtlMinutes: number;
@@ -204,6 +211,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     pgPoolMin: parseIntEnv(env.PG_POOL_MIN, 0),
     pgPoolIdleTimeoutMs: parseIntEnv(env.PG_POOL_IDLE_TIMEOUT_MS, 30_000),
     pgPoolConnectionTimeoutMs: parseIntEnv(env.PG_POOL_CONNECTION_TIMEOUT_MS, 5_000),
+
+    logLevel: env.LOG_LEVEL ?? "info",
+    maxInflightRequests: parseIntEnv(env.MAX_INFLIGHT_REQUESTS, 0),
 
     sessionTtlHours: parseIntEnv(env.SESSION_TTL_HOURS, 12),
     pendingSessionTtlMinutes: parseIntEnv(env.PENDING_SESSION_TTL_MINUTES, 10),
