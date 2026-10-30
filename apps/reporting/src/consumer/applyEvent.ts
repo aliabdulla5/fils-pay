@@ -19,8 +19,7 @@ export interface OutboxEventRow {
  * aggregation over transactions.captured_fils.
  */
 async function applyTransactionCaptured(client: PoolClient, row: OutboxEventRow): Promise<void> {
-  const payload = row.payload as { merchantId?: string; amountCapturedFils?: number };
-  if (!payload?.merchantId) return;
+  const payload = row.payload as { merchantId: string; amountCapturedFils: number };
   const volumeDate = toBahrainDateString(row.created_at);
   await client.query(
     `INSERT INTO merchant_daily_volume (merchant_id, volume_date, captured_count, captured_gross_fils, last_updated_at)
@@ -83,14 +82,13 @@ function bahrainLocalMidnightUtc(dateStr: string): Date {
  */
 async function applyBatchClosed(client: PoolClient, row: OutboxEventRow): Promise<void> {
   const payload = row.payload as {
-    merchantId?: string;
-    batchId?: string;
-    batchDate?: string;
-    grossFils?: number;
-    feeFils?: number;
-    netPayoutFils?: number;
+    merchantId: string;
+    batchId: string;
+    batchDate: string;
+    grossFils: number;
+    feeFils: number;
+    netPayoutFils: number;
   };
-  if (!payload?.merchantId || !payload?.batchId || !payload?.batchDate) return;
 
   const batchResult = await client.query<{ status: string; paid_at: Date | null }>(
     `SELECT status, paid_at FROM settlement_batches WHERE id = $1`,
@@ -198,9 +196,8 @@ export async function applyEvent(client: PoolClient, row: OutboxEventRow): Promi
       return applyTransactionVoided(client, row);
     case "refund.succeeded": {
       // processRefund.ts's outbox payload: { merchantId, amountFils, ... }
-      const payload = row.payload as { merchantId?: string; amountFils?: number };
-      if (!payload?.merchantId) return;
-      return applyDailySummaryRollup(client, payload.merchantId, row.created_at, payload.amountFils ?? 0);
+      const payload = row.payload as { merchantId: string; amountFils: number };
+      return applyDailySummaryRollup(client, payload.merchantId, row.created_at, payload.amountFils);
     }
     case "settlement.batch_closed":
       return applyBatchClosed(client, row);
