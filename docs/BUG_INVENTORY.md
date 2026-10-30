@@ -149,3 +149,14 @@ During this review another agent session edited the same working tree, and sever
 - **Confirmed defects left open, with reason:** 10. Items 1–3, 16, 17 (`Math.random`, `displayName` comparison: explicit instruction); 71, 72 (v1 501 stub, refund webhook deferral: explicit instruction); 73 (column width: needs an approved migration plan); 74 (REAL lifetime estimate: needs DBA approval); 70 (commit-order outbox consumption: design work). Item 30 is partially addressed (merchant route live; v1 stub retained by instruction).
 - **Intentional behaviours / false positives excluded:** item 47 plus the five in the section above; 58 needs no product change.
 - **Test or environment problems (separate from product defects):** 7 stale API assertions; 4 reporting failures from shared-database contamination (11/11 alone); 1 stale scripts assertion (UTC month); 2 stale Go assertions (`refresh_test.go`, pre-ADR-0008); Go DB tests skip without `DATABASE_URL`; reporting typecheck currently broken by the concurrent working-tree edit.
+
+## Provenance check (2026-10-30): original repo vs changes made along the way
+
+Baseline: commit `8b58b0f`, the last commit by the challenge's authors; `a4be087` is the team's first commit.
+
+- **Items 75–92 and 73 are all in the original code.** Each defective line was found at `8b58b0f`. Items 76, 80 and 88 were also reproduced by running the original application code: an unrelated merchant's report resolves to another marketplace's child; an empty hold list builds a bare `DELETE FROM holds`; a capture replay credits 5.000 BD instead of 2.500. The original migrations also stop at 0054 (`settlement_batch_events` does not exist; item 51).
+- **Spot-check of earlier items, all present at `8b58b0f`:** 1 (client clock for link expiry), 7 (unsigned callbacks accepted by default), 9 (`Buffer.compare`), 11 (seed on every `up`), 12 (`super_admin` → `owner`), 30 (refund 501), 44 (per-child rounding), 49 (`parseDecimalMinor`), 52 (balance view from scheme lines), 65 (daemon on UTC).
+- **Not listed above, also original and already fixed by `a4be087`:** the API's built-in dev webhook key decoded to 34 bytes, so the original API refused to boot in development without `WEBHOOK_SECRET_ENCRYPTION_KEY`.
+- **Introduced along the way: none in `a4be087`.** The only changes that make things worse are the *uncommitted* working-tree edits by a concurrent agent session:
+  - They restore original bugs: `adjustmentCsvParsing.ts` is byte-identical to the original (10× import); the fee-display query is back to `ORDER BY created_at`; `reconcile_march.ts` is back on the UTC month; the discount formula is fee-first again.
+  - They add new problems that are not in the original: test-only `NODE_ENV === "test"` behaviour in `dispatcher.ts`; silent skipping of malformed events in `applyEvent.ts` (breaks the atomicity test and typecheck); a reporting `npm test` that runs the destructive seed first.
